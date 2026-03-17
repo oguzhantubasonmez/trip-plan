@@ -1,0 +1,28 @@
+/* Takvim popover'ı butonun ve diğer öğelerin üstünde görünsün */
+.react-datepicker-popper,
+.rwDatePickerPopper {
+  z-index: 9999 !important;
+}
+.react-datepicker {
+  z-index: 9999;
+}
+
+.rwDatePickerWrapper {
+  width: 100%;
+}
+
+.rwDatePickerInput {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: rgba(234, 240, 255, 0.9);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.rwDatePickerInput::placeholder {
+  color: rgba(234, 240, 255, 0.55);
+  font-weight: 600;
+}
+

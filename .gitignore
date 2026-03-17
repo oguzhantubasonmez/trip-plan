@@ -1,0 +1,13 @@
+# Dependencies and build
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/web-build/
+
+# Env and secrets (never commit)
+mobile/.env
+mobile/.env*.local
+
+# OS and IDE
+.DS_Store
+*.log
