@@ -8,7 +8,7 @@ import { auth } from '../lib/firebase';
 import { getUserProfile, updateUserProfile } from '../services/userProfile';
 import { theme } from '../theme';
 
-export function ProfileScreen(props: { onBack: () => void }) {
+export function ProfileScreen(props: { onBack: () => void; onOpenGroups: () => void }) {
   const uid = auth.currentUser?.uid;
   const [displayName, setDisplayName] = useState('');
   const [carConsumption, setCarConsumption] = useState('');
@@ -73,6 +73,12 @@ export function ProfileScreen(props: { onBack: () => void }) {
         <PrimaryButton title="Kaydet" onPress={save} loading={loading} />
         {saved ? <Text style={styles.saved}>Kaydedildi.</Text> : null}
       </View>
+
+      <View style={{ height: theme.space.lg }} />
+      <Pressable onPress={props.onOpenGroups} style={styles.extraBtn}>
+        <Text style={styles.extraBtnText}>Arkadaş grupları</Text>
+        <Text style={styles.extraBtnSub}>Gruplar oluştur, rotalara toplu ekle</Text>
+      </Pressable>
     </Screen>
   );
 }
@@ -91,4 +97,13 @@ const styles = StyleSheet.create({
     borderColor: theme.color.border,
   },
   saved: { color: theme.color.success, fontSize: theme.font.small, marginTop: theme.space.sm, fontWeight: '700' },
+  extraBtn: {
+    backgroundColor: theme.color.surface,
+    borderRadius: theme.radius.lg,
+    padding: theme.space.lg,
+    borderWidth: 1,
+    borderColor: theme.color.border,
+  },
+  extraBtnText: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '700' },
+  extraBtnSub: { color: theme.color.muted, fontSize: theme.font.small, marginTop: 4 },
 });

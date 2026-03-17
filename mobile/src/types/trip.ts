@@ -31,6 +31,7 @@ export type Stop = {
   departureTime?: string;
   cost?: number;
   status: StopStatus;
+  order?: number;
   createdBy?: string;
   createdAt?: any;
   updatedAt?: any;

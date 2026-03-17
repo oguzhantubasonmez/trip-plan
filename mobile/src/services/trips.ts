@@ -8,6 +8,7 @@ import {
   setDoc,
   updateDoc,
   where,
+  writeBatch,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import type { Stop, Trip, TripAttendee } from '../types/trip';
@@ -94,9 +95,7 @@ export async function getStopsForTrip(tripId: string): Promise<Stop[]> {
   const q = query(collection(db, STOPS), where('tripId', '==', tripId));
   const snap = await getDocs(q);
   const out: Stop[] = [];
-  const docs = snap.docs.sort(
-    (a, b) => (a.data().createdAt?.toMillis?.() ?? 0) - (b.data().createdAt?.toMillis?.() ?? 0)
-  );
+  const docs = snap.docs;
   docs.forEach((d) => {
     const v = d.data() as any;
     out.push({
@@ -108,10 +107,19 @@ export async function getStopsForTrip(tripId: string): Promise<Stop[]> {
       departureTime: v.departureTime,
       cost: v.cost,
       status: v.status || 'pending',
+      order: v.order,
       createdBy: v.createdBy,
       createdAt: v.createdAt,
       updatedAt: v.updatedAt,
     });
+  });
+  out.sort((a, b) => {
+    const oA = a.order ?? 999999;
+    const oB = b.order ?? 999999;
+    if (oA !== oB) return oA - oB;
+    const tA = a.createdAt?.toMillis?.() ?? 0;
+    const tB = b.createdAt?.toMillis?.() ?? 0;
+    return tA - tB;
   });
   return out;
 }
@@ -122,6 +130,7 @@ export async function addStop(params: {
   createdBy: string;
   status?: Stop['status'];
   coords?: { latitude: number; longitude: number };
+  order?: number;
 }): Promise<string> {
   const ref = doc(collection(db, STOPS));
   const data: Record<string, any> = {
@@ -130,12 +139,22 @@ export async function addStop(params: {
     locationName: params.locationName,
     status: params.status ?? 'pending',
     createdBy: params.createdBy,
+    order: params.order ?? 0,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
   if (params.coords) data.coords = params.coords;
   await setDoc(ref, data);
   return ref.id;
+}
+
+export async function reorderStops(tripId: string, orderedStopIds: string[]): Promise<void> {
+  const batch = writeBatch(db);
+  orderedStopIds.forEach((stopId, index) => {
+    const ref = doc(db, STOPS, stopId);
+    batch.update(ref, { order: index, updatedAt: serverTimestamp() });
+  });
+  await batch.commit();
 }
 
 export async function updateStopStatus(stopId: string, status: Stop['status']): Promise<void> {

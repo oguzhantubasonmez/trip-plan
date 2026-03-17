@@ -31,6 +31,7 @@ export function HomeScreen(props: {
   onCreateTrip: () => void;
   onOpenTrip: (tripId: string) => void;
   onOpenProfile: () => void;
+  onOpenGroups: () => void;
 }) {
   const [trips, setTrips] = useState<Trip[]>([]);
   const [loading, setLoading] = useState(true);
@@ -64,6 +65,10 @@ export function HomeScreen(props: {
 
       <View style={styles.actions}>
         <PrimaryButton title="+ Yeni rota" onPress={props.onCreateTrip} />
+        <View style={{ height: theme.space.xs }} />
+        <Pressable onPress={props.onOpenGroups} style={styles.profileBtn}>
+          <Text style={styles.profileBtnText}>Arkadaş grupları</Text>
+        </Pressable>
         <View style={{ height: theme.space.xs }} />
         <Pressable onPress={props.onOpenProfile} style={styles.profileBtn}>
           <Text style={styles.profileBtnText}>Profil (araç tüketimi)</Text>

@@ -1,11 +1,13 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useMemo, useState } from 'react';
+import * as Clipboard from 'expo-clipboard';
 import {
   ActivityIndicator,
   Modal,
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   View,
@@ -16,16 +18,19 @@ import { Screen } from '../components/Screen';
 import { StopCard } from '../components/StopCard';
 import { TextField } from '../components/TextField';
 import { auth } from '../lib/firebase';
+import { getGroupsForUser } from '../services/groups';
 import { getUserProfile } from '../services/userProfile';
 import {
   addAttendeeToTrip,
   addStop,
   getStopsForTrip,
   getTrip,
+  reorderStops,
   updateAttendeeRsvp,
   updateStopStatus,
   updateTripDistanceAndFuel,
 } from '../services/trips';
+import type { Group } from '../types/group';
 import type { Stop as StopType, Trip } from '../types/trip';
 import type { UserProfile } from '../services/userProfile';
 import { theme } from '../theme';
@@ -67,7 +72,15 @@ export function TripDetailScreen(props: {
   const [fuelPriceInput, setFuelPriceInput] = useState('');
   const [savingCost, setSavingCost] = useState(false);
   const [addPlaceModalVisible, setAddPlaceModalVisible] = useState(Boolean(props.openAddPlace));
+  const [copied, setCopied] = useState(false);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [addingGroupId, setAddingGroupId] = useState<string | null>(null);
   const currentUid = auth.currentUser?.uid;
+
+  const inviteUrl =
+    Platform.OS === 'web' && typeof window !== 'undefined'
+      ? `${window.location.origin}${window.location.pathname || '/'}?invite=${props.tripId}`
+      : `https://trip-plan.invite/${props.tripId}`;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -95,8 +108,12 @@ export function TripDetailScreen(props: {
         setUserProfiles(map);
       }
       if (currentUid && t) {
-        const me = await getUserProfile(currentUid);
+        const [me, groupList] = await Promise.all([
+          getUserProfile(currentUid),
+          getGroupsForUser(currentUid),
+        ]);
         setFriendUids(me?.friends ?? []);
+        setGroups(groupList);
       }
       if (t?.totalDistance != null && t.totalDistance > 0) setDistanceInput(String(t.totalDistance));
     } catch (e: any) {
@@ -136,6 +153,7 @@ export function TripDetailScreen(props: {
         locationName: name,
         createdBy: currentUid,
         status: trip?.adminId === currentUid ? 'approved' : 'pending',
+        order: stops.length,
       });
       setNewStopName('');
       await load();
@@ -157,6 +175,7 @@ export function TripDetailScreen(props: {
       createdBy: currentUid,
       status: trip?.adminId === currentUid ? 'approved' : 'pending',
       coords: params.coords,
+      order: stops.length,
     });
     await load();
   }
@@ -170,6 +189,34 @@ export function TripDetailScreen(props: {
     } catch (_) {}
   }
 
+  async function handleMoveStop(index: number, direction: 'up' | 'down') {
+    if (trip?.adminId !== currentUid || stops.length < 2) return;
+    const newOrder = [...stops];
+    const swap = direction === 'up' ? index - 1 : index + 1;
+    if (swap < 0 || swap >= newOrder.length) return;
+    [newOrder[index], newOrder[swap]] = [newOrder[swap], newOrder[index]];
+    try {
+      await reorderStops(props.tripId, newOrder.map((s) => s.stopId));
+      await load();
+    } catch (_) {}
+  }
+
+  async function handleCopyInviteLink() {
+    await Clipboard.setStringAsync(inviteUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  async function handleShareInvite() {
+    try {
+      await Share.share({
+        title: trip?.title ?? 'Rota daveti',
+        message: `${trip?.title ?? 'Rota'} daveti: ${inviteUrl}`,
+        url: inviteUrl,
+      });
+    } catch (_) {}
+  }
+
   async function handleAddAttendee(uid: string) {
     try {
       await addAttendeeToTrip(props.tripId, uid, selectedRole);
@@ -177,6 +224,24 @@ export function TripDetailScreen(props: {
       await load();
     } catch (e: any) {
       setError(e?.message || 'Eklenemedi.');
+    }
+  }
+
+  async function handleAddGroupToTrip(group: Group) {
+    if (!trip) return;
+    const inTrip = new Set(trip.attendees.map((a) => a.uid));
+    const toAdd = group.memberIds.filter((uid) => !inTrip.has(uid));
+    if (toAdd.length === 0) return;
+    setAddingGroupId(group.groupId);
+    try {
+      for (const uid of toAdd) {
+        await addAttendeeToTrip(props.tripId, uid, selectedRole);
+      }
+      await load();
+    } catch (e: any) {
+      setError(e?.message || 'Grup eklenemedi.');
+    } finally {
+      setAddingGroupId(null);
     }
   }
 
@@ -286,17 +351,41 @@ export function TripDetailScreen(props: {
             </View>
           ) : (
             <>
-              {stops.map((item) => (
-                <StopCard
-                  key={item.stopId}
-                  stop={item}
-                  isAdmin={isAdmin}
-                  currentUid={currentUid}
-                  userProfiles={userProfiles}
-                  displayName={displayName}
-                  onToggleStatus={() => handleToggleStopStatus(item)}
-                  onRefresh={load}
-                />
+              {stops.map((item, index) => (
+                <View key={item.stopId} style={styles.stopRow}>
+                  {isAdmin && (
+                    <View style={styles.orderBtns}>
+                      <Pressable
+                        onPress={() => handleMoveStop(index, 'up')}
+                        disabled={index === 0}
+                        style={[styles.orderBtn, index === 0 && styles.orderBtnDisabled]}
+                      >
+                        <Text style={styles.orderBtnText}>↑</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => handleMoveStop(index, 'down')}
+                        disabled={index === stops.length - 1}
+                        style={[
+                          styles.orderBtn,
+                          index === stops.length - 1 && styles.orderBtnDisabled,
+                        ]}
+                      >
+                        <Text style={styles.orderBtnText}>↓</Text>
+                      </Pressable>
+                    </View>
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <StopCard
+                      stop={item}
+                      isAdmin={isAdmin}
+                      currentUid={currentUid}
+                      userProfiles={userProfiles}
+                      displayName={displayName}
+                      onToggleStatus={() => handleToggleStopStatus(item)}
+                      onRefresh={load}
+                    />
+                  </View>
+                </View>
               ))}
             </>
           )}
@@ -310,6 +399,16 @@ export function TripDetailScreen(props: {
                 <Text style={styles.linkBtnText}>+ Ekle</Text>
               </Pressable>
             )}
+          </View>
+          <View style={styles.inviteRow}>
+            <Pressable onPress={handleCopyInviteLink} style={styles.inviteBtn}>
+              <Text style={styles.inviteBtnText}>
+                {copied ? 'Kopyalandı!' : 'Davet linkini kopyala'}
+              </Text>
+            </Pressable>
+            <Pressable onPress={handleShareInvite} style={styles.inviteBtn}>
+              <Text style={styles.inviteBtnText}>Paylaş</Text>
+            </Pressable>
           </View>
           {trip.attendees.map((a) => (
             <View key={a.uid} style={styles.attendeeRow}>
@@ -424,6 +523,37 @@ export function TripDetailScreen(props: {
                 <Text style={styles.roleBtnText}>İzleyici</Text>
               </Pressable>
             </View>
+
+            {groups.length > 0 && (
+              <>
+                <Text style={styles.modalSectionTitle}>Gruplardan ekle</Text>
+                {groups.map((group) => {
+                  const inTrip = new Set(trip?.attendees.map((a) => a.uid) ?? []);
+                  const toAddCount = group.memberIds.filter((uid) => !inTrip.has(uid)).length;
+                  return (
+                    <View key={group.groupId} style={styles.groupRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.groupRowName}>{group.name}</Text>
+                        <Text style={styles.muted}>
+                          {toAddCount > 0
+                            ? `${toAddCount} kişi rotaya eklenebilir`
+                            : 'Tüm üyeler zaten rotada'}
+                        </Text>
+                      </View>
+                      <PrimaryButton
+                        title={addingGroupId === group.groupId ? '...' : 'Rotaya ekle'}
+                        onPress={() => handleAddGroupToTrip(group)}
+                        disabled={toAddCount === 0 || addingGroupId !== null}
+                        loading={addingGroupId === group.groupId}
+                      />
+                    </View>
+                  );
+                })}
+                <View style={styles.modalDivider} />
+              </>
+            )}
+
+            <Text style={styles.modalSectionTitle}>Tek tek arkadaş ekle</Text>
             {friendsNotInTrip.length === 0 ? (
               <Text style={styles.muted}>Eklenebilir arkadaş yok.</Text>
             ) : (
@@ -472,8 +602,30 @@ const styles = StyleSheet.create({
   mapAddRow: { marginBottom: theme.space.sm },
   linkBtn: { paddingVertical: 4, paddingHorizontal: 8 },
   linkBtnText: { color: theme.color.primary, fontSize: theme.font.small, fontWeight: '700' },
+  inviteRow: { flexDirection: 'row', gap: theme.space.sm, marginBottom: theme.space.sm, flexWrap: 'wrap' },
+  inviteBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: theme.radius.pill,
+    borderWidth: 1,
+    borderColor: theme.color.border,
+    backgroundColor: theme.color.inputBg,
+  },
+  inviteBtnText: { color: theme.color.primary, fontSize: theme.font.small, fontWeight: '700' },
   addRow: { flexDirection: 'row', alignItems: 'flex-end', marginBottom: theme.space.sm },
   empty: { paddingVertical: theme.space.lg },
+  stopRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: theme.space.sm, gap: theme.space.sm },
+  orderBtns: { flexDirection: 'column', gap: 2 },
+  orderBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: theme.radius.sm,
+    borderWidth: 1,
+    borderColor: theme.color.border,
+    backgroundColor: theme.color.inputBg,
+  },
+  orderBtnDisabled: { opacity: 0.4 },
+  orderBtnText: { color: theme.color.muted, fontSize: theme.font.small, fontWeight: '700' },
   attendeeRow: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: theme.color.subtle },
   attendeeName: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '700' },
   attendeeMeta: { color: theme.color.muted, fontSize: theme.font.small, marginTop: 2 },
@@ -511,6 +663,10 @@ const styles = StyleSheet.create({
     maxWidth: 400,
   },
   modalTitle: { color: theme.color.text, fontSize: theme.font.h2, fontWeight: '800', marginBottom: theme.space.sm },
+  modalSectionTitle: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '700', marginTop: theme.space.md, marginBottom: theme.space.xs },
+  modalDivider: { height: 1, backgroundColor: theme.color.subtle, marginVertical: theme.space.sm },
+  groupRow: { flexDirection: 'row', alignItems: 'center', gap: theme.space.sm, marginBottom: theme.space.sm },
+  groupRowName: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '700' },
   roleRow: { flexDirection: 'row', gap: 8, marginBottom: theme.space.md },
   roleBtn: {
     paddingHorizontal: 14,
