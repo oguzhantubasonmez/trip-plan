@@ -1,5 +1,21 @@
-import { doc, getDoc, getDocs, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+
+export type ExpenseType = {
+  id: string;
+  name: string;
+};
+
+function parseExpenseTypes(v: any): ExpenseType[] {
+  if (!Array.isArray(v)) return [];
+  const out: ExpenseType[] = [];
+  for (const x of v) {
+    if (x && typeof x.id === 'string' && typeof x.name === 'string' && x.name.trim()) {
+      out.push({ id: x.id, name: x.name.trim() });
+    }
+  }
+  return out;
+}
 
 export type UserProfile = {
   uid: string;
@@ -8,6 +24,8 @@ export type UserProfile = {
   avatar?: string;
   carConsumption?: string;
   friends?: string[];
+  /** Kullanıcının tanımladığı ekstra masraf türleri (durak masrafında seçilir) */
+  expenseTypes?: ExpenseType[];
 };
 
 export async function getUserProfile(uid: string): Promise<UserProfile | null> {
@@ -22,6 +40,7 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
     avatar: v.avatar,
     carConsumption: v.carConsumption,
     friends: v.friends || [],
+    expenseTypes: parseExpenseTypes(v.expenseTypes),
   };
 }
 
@@ -37,6 +56,7 @@ export async function ensureUserDoc(params: { uid: string; phoneNumber: string }
         displayName: '',
         avatar: '',
         friends: [],
+        expenseTypes: [],
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       },
@@ -49,12 +69,17 @@ export async function ensureUserDoc(params: { uid: string; phoneNumber: string }
 
 export async function updateUserProfile(
   uid: string,
-  data: { displayName?: string; carConsumption?: string }
+  data: {
+    displayName?: string;
+    carConsumption?: string;
+    expenseTypes?: ExpenseType[];
+  }
 ): Promise<void> {
   const ref = doc(db, 'users', uid);
   const updates: Record<string, any> = { updatedAt: serverTimestamp() };
   if (data.displayName !== undefined) updates.displayName = data.displayName;
   if (data.carConsumption !== undefined) updates.carConsumption = data.carConsumption;
+  if (data.expenseTypes !== undefined) updates.expenseTypes = data.expenseTypes;
   await updateDoc(ref, updates);
 }
 

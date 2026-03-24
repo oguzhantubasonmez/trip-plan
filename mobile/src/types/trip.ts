@@ -7,20 +7,45 @@ export type TripAttendee = {
   rsvp?: RsvpStatus;
 };
 
+export type LegFromPrevious = {
+  distanceKm?: number;
+  durationMin?: number;
+  /** driving = Google yol mesafesi; straight_line = kuş uçuşu (API yok / hata) */
+  distanceBasis?: 'driving' | 'straight_line';
+};
+
 export type Trip = {
   tripId: string;
   adminId: string;
   title: string;
   startDate: string;
   endDate: string;
+  /** Planlanan başlangıç saati (HH:mm, opsiyonel) */
+  startTime?: string;
+  /** Planlanan bitiş saati (HH:mm, opsiyonel) */
+  endTime?: string;
   totalDistance?: number;
   totalFuelCost?: number;
+  /** Rota için seçilen araç etiketi (örn. "Aile arabası") */
+  vehicleLabel?: string;
+  /** Bu rotada kullanılacak tüketim (L/100 km) – profilden bağımsız */
+  tripConsumptionLPer100km?: number;
+  /** Yakıt fiyatı TL/L (rota özeti için) */
+  fuelPricePerLiter?: number;
   attendees: TripAttendee[];
   createdAt?: any;
   updatedAt?: any;
 };
 
 export type StopStatus = 'pending' | 'approved';
+
+/** Tek satır ekstra masraf (aynı durakta birden fazla) */
+export type StopExtraExpense = {
+  expenseId: string;
+  amount: number;
+  extraExpenseTypeId?: string | null;
+  extraExpenseTypeName?: string | null;
+};
 
 export type Stop = {
   stopId: string;
@@ -30,6 +55,13 @@ export type Stop = {
   arrivalTime?: string;
   departureTime?: string;
   cost?: number;
+  /** Çoklu ekstra masraf (varsa `cost` ile birlikte toplam senkron tutulur) */
+  extraExpenses?: StopExtraExpense[];
+  /** Profildeki masraf türü (kaydedildiğinde anlık ad da saklanır) */
+  extraExpenseTypeId?: string | null;
+  extraExpenseTypeName?: string | null;
+  /** Önceki duraktan bu durağa tahmini yol (km + süre) */
+  legFromPrevious?: LegFromPrevious;
   status: StopStatus;
   order?: number;
   createdBy?: string;

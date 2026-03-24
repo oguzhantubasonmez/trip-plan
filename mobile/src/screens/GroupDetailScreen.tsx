@@ -17,12 +17,15 @@ import { addMemberToGroup, getGroup, removeMemberFromGroup, updateGroup } from '
 import { getUserProfile } from '../services/userProfile';
 import type { Group } from '../types/group';
 import type { UserProfile } from '../services/userProfile';
-import { theme } from '../theme';
+import { useAppTheme } from '../ThemeContext';
+import type { AppTheme } from '../theme';
 
 export function GroupDetailScreen(props: {
   groupId: string;
   onBack: () => void;
 }) {
+  const appTheme = useAppTheme();
+  const styles = useMemo(() => createGroupDetailStyles(appTheme), [appTheme]);
   const [group, setGroup] = useState<Group | null>(null);
   const [profiles, setProfiles] = useState<Map<string, UserProfile>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -118,7 +121,7 @@ export function GroupDetailScreen(props: {
     return (
       <Screen>
         <View style={styles.centered}>
-          <ActivityIndicator />
+          <ActivityIndicator color={appTheme.color.primary} />
           <Text style={styles.muted}>Yükleniyor...</Text>
         </View>
       </Screen>
@@ -130,7 +133,7 @@ export function GroupDetailScreen(props: {
       <Screen>
         <View style={styles.centered}>
           <Text style={styles.error}>{error || 'Grup bulunamadı.'}</Text>
-          <View style={{ height: theme.space.md }} />
+          <View style={{ height: appTheme.space.md }} />
           <PrimaryButton title="Geri" onPress={props.onBack} />
         </View>
       </Screen>
@@ -155,7 +158,7 @@ export function GroupDetailScreen(props: {
               placeholder="Grup adı"
               onChangeText={setEditName}
             />
-            <View style={{ height: theme.space.sm }} />
+            <View style={{ height: appTheme.space.sm }} />
             <PrimaryButton
               title="Kaydet"
               onPress={handleSaveName}
@@ -205,7 +208,7 @@ export function GroupDetailScreen(props: {
           <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
             <Text style={styles.modalTitle}>Üye ekle</Text>
             <Text style={styles.muted}>Sadece arkadaş listenizdeki kişileri ekleyebilirsiniz.</Text>
-            <View style={{ height: theme.space.sm }} />
+            <View style={{ height: appTheme.space.sm }} />
             {friendsNotInGroup.length === 0 ? (
               <Text style={styles.muted}>Eklenebilir arkadaş yok.</Text>
             ) : (
@@ -222,7 +225,7 @@ export function GroupDetailScreen(props: {
                 ))}
               </ScrollView>
             )}
-            <View style={{ height: theme.space.md }} />
+            <View style={{ height: appTheme.space.md }} />
             <PrimaryButton title="Kapat" onPress={() => setAddMemberModal(false)} />
           </Pressable>
         </Pressable>
@@ -231,57 +234,59 @@ export function GroupDetailScreen(props: {
   );
 }
 
-const styles = StyleSheet.create({
-  backRow: { alignSelf: 'flex-start', paddingVertical: 4, paddingRight: 8, marginBottom: theme.space.sm },
-  backText: { color: theme.color.primary, fontSize: theme.font.body, fontWeight: '700' },
-  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
-  muted: { color: theme.color.muted, fontSize: theme.font.small },
-  error: { color: theme.color.danger, fontSize: theme.font.body, fontWeight: '700', textAlign: 'center' },
-  section: {
-    backgroundColor: theme.color.surface,
-    borderRadius: theme.radius.lg,
-    padding: theme.space.lg,
-    borderWidth: 1,
-    borderColor: theme.color.border,
-    marginBottom: theme.space.md,
-  },
-  sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: theme.space.sm },
-  sectionTitle: { color: theme.color.text, fontSize: theme.font.h2, fontWeight: '800' },
-  groupNameRead: { color: theme.color.text, fontSize: theme.font.body },
-  linkBtn: { paddingVertical: 4, paddingHorizontal: 8 },
-  linkBtnText: { color: theme.color.primary, fontSize: theme.font.small, fontWeight: '700' },
-  memberList: { gap: 4 },
-  memberRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.color.subtle,
-  },
-  memberName: { color: theme.color.text, fontSize: theme.font.body },
-  removeBtn: { paddingVertical: 4, paddingHorizontal: 8 },
-  removeBtnText: { color: theme.color.danger, fontSize: theme.font.small, fontWeight: '700' },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: theme.space.lg,
-  },
-  modalContent: {
-    backgroundColor: theme.color.surface,
-    borderRadius: theme.radius.lg,
-    padding: theme.space.lg,
-    borderWidth: 1,
-    borderColor: theme.color.border,
-    width: '100%',
-    maxWidth: 400,
-    maxHeight: '80%',
-  },
-  modalTitle: { color: theme.color.text, fontSize: theme.font.h2, fontWeight: '800', marginBottom: theme.space.sm },
-  modalList: { maxHeight: 280, marginVertical: theme.space.sm },
-  friendRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12 },
-  friendName: { color: theme.color.text, fontSize: theme.font.body },
-  friendAdd: { color: theme.color.primary, fontSize: theme.font.small, fontWeight: '700' },
-});
+function createGroupDetailStyles(t: AppTheme) {
+  return StyleSheet.create({
+    backRow: { alignSelf: 'flex-start', paddingVertical: 4, paddingRight: 8, marginBottom: t.space.sm },
+    backText: { color: t.color.primary, fontSize: t.font.body, fontWeight: '700' },
+    centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
+    muted: { color: t.color.muted, fontSize: t.font.small },
+    error: { color: t.color.danger, fontSize: t.font.body, fontWeight: '700', textAlign: 'center' },
+    section: {
+      backgroundColor: t.color.surface,
+      borderRadius: t.radius.lg,
+      padding: t.space.lg,
+      borderWidth: 1,
+      borderColor: t.color.border,
+      marginBottom: t.space.md,
+    },
+    sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: t.space.sm },
+    sectionTitle: { color: t.color.text, fontSize: t.font.h2, fontWeight: '800' },
+    groupNameRead: { color: t.color.text, fontSize: t.font.body },
+    linkBtn: { paddingVertical: 4, paddingHorizontal: 8 },
+    linkBtnText: { color: t.color.primary, fontSize: t.font.small, fontWeight: '700' },
+    memberList: { gap: 4 },
+    memberRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 10,
+      borderBottomWidth: 1,
+      borderBottomColor: t.color.subtle,
+    },
+    memberName: { color: t.color.text, fontSize: t.font.body },
+    removeBtn: { paddingVertical: 4, paddingHorizontal: 8 },
+    removeBtnText: { color: t.color.danger, fontSize: t.font.small, fontWeight: '700' },
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: t.color.overlayDark,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: t.space.lg,
+    },
+    modalContent: {
+      backgroundColor: t.color.surface,
+      borderRadius: t.radius.lg,
+      padding: t.space.lg,
+      borderWidth: 1,
+      borderColor: t.color.border,
+      width: '100%',
+      maxWidth: 400,
+      maxHeight: '80%',
+    },
+    modalTitle: { color: t.color.text, fontSize: t.font.h2, fontWeight: '800', marginBottom: t.space.sm },
+    modalList: { maxHeight: 280, marginVertical: t.space.sm },
+    friendRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12 },
+    friendName: { color: t.color.text, fontSize: t.font.body },
+    friendAdd: { color: t.color.primary, fontSize: t.font.small, fontWeight: '700' },
+  });
+}

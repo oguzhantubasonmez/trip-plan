@@ -1,16 +1,19 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
 import { TextField } from '../components/TextField';
 import { auth } from '../lib/firebase';
 import { createGroup } from '../services/groups';
-import { theme } from '../theme';
+import { useAppTheme } from '../ThemeContext';
+import type { AppTheme } from '../theme';
 
 export function CreateGroupScreen(props: {
   onBack: () => void;
   onCreated: (groupId: string) => void;
 }) {
+  const appTheme = useAppTheme();
+  const styles = useMemo(() => createCreateGroupStyles(appTheme), [appTheme]);
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,7 +50,7 @@ export function CreateGroupScreen(props: {
         onChangeText={setName}
       />
       {error ? <Text style={styles.error}>{error}</Text> : null}
-      <View style={{ height: theme.space.md }} />
+      <View style={{ height: appTheme.space.md }} />
       <PrimaryButton
         title="Oluştur"
         onPress={handleCreate}
@@ -58,11 +61,13 @@ export function CreateGroupScreen(props: {
   );
 }
 
-const styles = StyleSheet.create({
-  backRow: { alignSelf: 'flex-start', paddingVertical: 4, paddingRight: 8, marginBottom: theme.space.sm },
-  backText: { color: theme.color.primary, fontSize: theme.font.body, fontWeight: '700' },
-  header: { gap: 6, marginBottom: theme.space.lg },
-  title: { color: theme.color.text, fontSize: theme.font.h1, fontWeight: '900' },
-  sub: { color: theme.color.muted, fontSize: theme.font.body, lineHeight: 22 },
-  error: { color: theme.color.danger, fontSize: theme.font.small, marginTop: theme.space.sm },
-});
+function createCreateGroupStyles(t: AppTheme) {
+  return StyleSheet.create({
+    backRow: { alignSelf: 'flex-start', paddingVertical: 4, paddingRight: 8, marginBottom: t.space.sm },
+    backText: { color: t.color.primary, fontSize: t.font.body, fontWeight: '700' },
+    header: { gap: 6, marginBottom: t.space.lg },
+    title: { color: t.color.text, fontSize: t.font.h1, fontWeight: '900' },
+    sub: { color: t.color.muted, fontSize: t.font.body, lineHeight: 22 },
+    error: { color: t.color.danger, fontSize: t.font.small, marginTop: t.space.sm },
+  });
+}

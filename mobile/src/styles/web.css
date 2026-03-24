@@ -1,10 +1,14 @@
-/* Takvim popover'ı butonun ve diğer öğelerin üstünde görünsün */
+/* Takvim — açık tema, gezi uygulaması */
 .react-datepicker-popper,
 .rwDatePickerPopper {
   z-index: 9999 !important;
 }
 .react-datepicker {
   z-index: 9999;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 16px;
+  box-shadow: 0 12px 40px rgba(3, 105, 161, 0.15);
 }
 
 .rwDatePickerWrapper {
@@ -16,13 +20,42 @@
   background: transparent;
   border: 0;
   outline: none;
-  color: rgba(234, 240, 255, 0.9);
+  color: #0f172a;
   font-size: 16px;
   font-weight: 700;
 }
 
 .rwDatePickerInput::placeholder {
-  color: rgba(234, 240, 255, 0.55);
+  color: #94a3b8;
   font-weight: 600;
 }
 
+/* Koyu tema (ThemeContext data-theme) */
+[data-theme='dark'] .react-datepicker {
+  background: #1e293b;
+  border-color: rgba(248, 250, 252, 0.12);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+[data-theme='dark'] .react-datepicker__header {
+  background: #334155;
+  border-bottom-color: rgba(248, 250, 252, 0.1);
+}
+
+[data-theme='dark'] .react-datepicker__current-month,
+[data-theme='dark'] .react-datepicker__day-name,
+[data-theme='dark'] .react-datepicker__day {
+  color: #f1f5f9;
+}
+
+[data-theme='dark'] .react-datepicker__day:hover {
+  background: rgba(56, 189, 248, 0.2);
+}
+
+[data-theme='dark'] .rwDatePickerInput {
+  color: #f1f5f9;
+}
+
+[data-theme='dark'] .rwDatePickerInput::placeholder {
+  color: #94a3b8;
+}

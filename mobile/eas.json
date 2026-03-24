@@ -1,23 +1,34 @@
 {
   "cli": {
-    "version": ">= 18.4.0",
-    "appVersionSource": "remote"
+    "version": ">= 16.0.0"
   },
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "android": {
+        "image": "sdk-55"
+      },
+      "ios": {
+        "image": "sdk-55"
+      }
     },
     "preview": {
       "distribution": "internal",
       "android": {
-        "image": "ubuntu-22.04-jdk-17-ndk-26b"
+        "buildType": "apk",
+        "image": "sdk-55"
+      },
+      "ios": {
+        "image": "sdk-55"
       }
     },
     "production": {
-      "autoIncrement": true,
       "android": {
-        "image": "ubuntu-22.04-jdk-17-ndk-26b"
+        "image": "sdk-55"
+      },
+      "ios": {
+        "image": "sdk-55"
       }
     }
   },

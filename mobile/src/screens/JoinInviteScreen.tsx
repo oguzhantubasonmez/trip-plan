@@ -1,17 +1,20 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
 import { auth } from '../lib/firebase';
 import { addAttendeeToTrip, getTrip } from '../services/trips';
 import type { Trip } from '../types/trip';
-import { theme } from '../theme';
+import { useAppTheme } from '../ThemeContext';
+import type { AppTheme } from '../theme';
 
 export function JoinInviteScreen(props: {
   tripId: string;
   onJoined: (tripId: string) => void;
   onDecline: () => void;
 }) {
+  const appTheme = useAppTheme();
+  const styles = useMemo(() => createJoinInviteStyles(appTheme), [appTheme]);
   const [trip, setTrip] = useState<Trip | null>(null);
   const [loading, setLoading] = useState(true);
   const [joining, setJoining] = useState(false);
@@ -20,14 +23,19 @@ export function JoinInviteScreen(props: {
 
   useEffect(() => {
     let alive = true;
-    getTrip(props.tripId).then((t) => {
-      if (alive) setTrip(t ?? null);
-    }).catch(() => {
-      if (alive) setError('Rota bulunamadı.');
-    }).finally(() => {
-      if (alive) setLoading(false);
-    });
-    return () => { alive = false; };
+    getTrip(props.tripId)
+      .then((t) => {
+        if (alive) setTrip(t ?? null);
+      })
+      .catch(() => {
+        if (alive) setError('Rota bulunamadı.');
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
   }, [props.tripId]);
 
   const handleJoin = useCallback(async () => {
@@ -48,7 +56,7 @@ export function JoinInviteScreen(props: {
     return (
       <Screen>
         <View style={styles.centered}>
-          <ActivityIndicator />
+          <ActivityIndicator color={appTheme.color.primary} />
           <Text style={styles.muted}>Yükleniyor...</Text>
         </View>
       </Screen>
@@ -60,7 +68,7 @@ export function JoinInviteScreen(props: {
       <Screen>
         <View style={styles.centered}>
           <Text style={styles.error}>{error}</Text>
-          <View style={{ height: theme.space.md }} />
+          <View style={{ height: appTheme.space.md }} />
           <PrimaryButton title="Tamam" onPress={props.onDecline} />
         </View>
       </Screen>
@@ -83,16 +91,11 @@ export function JoinInviteScreen(props: {
     <Screen>
       <View style={styles.centered}>
         <Text style={styles.title}>Davet</Text>
-        <Text style={styles.message}>
-          "{trip.title}" rotasına katılmak ister misin?
-        </Text>
+        <Text style={styles.message}>"{trip.title}" rotasına katılmak ister misin?</Text>
         {error ? <Text style={styles.errorLine}>{error}</Text> : null}
         <View style={styles.buttons}>
           {alreadyInTrip ? (
-            <PrimaryButton
-              title="Rotaya git"
-              onPress={() => props.onJoined(props.tripId)}
-            />
+            <PrimaryButton title="Rotaya git" onPress={() => props.onJoined(props.tripId)} />
           ) : (
             <>
               <PrimaryButton
@@ -101,7 +104,7 @@ export function JoinInviteScreen(props: {
                 loading={joining}
                 disabled={joining}
               />
-              <View style={{ height: theme.space.sm }} />
+              <View style={{ height: appTheme.space.sm }} />
               <Pressable onPress={props.onDecline} style={styles.declineBtn}>
                 <Text style={styles.declineBtnText}>Hayır, teşekkürler</Text>
               </Pressable>
@@ -113,19 +116,21 @@ export function JoinInviteScreen(props: {
   );
 }
 
-const styles = StyleSheet.create({
-  centered: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: theme.space.xl,
-  },
-  title: { color: theme.color.text, fontSize: theme.font.h1, fontWeight: '800', marginBottom: theme.space.md },
-  message: { color: theme.color.text, fontSize: theme.font.body, textAlign: 'center', marginBottom: theme.space.lg },
-  errorLine: { color: theme.color.danger, fontSize: theme.font.small, marginBottom: theme.space.sm },
-  buttons: { width: '100%', maxWidth: 280 },
-  declineBtn: { paddingVertical: 12, alignItems: 'center' },
-  declineBtnText: { color: theme.color.muted, fontSize: theme.font.body },
-  muted: { color: theme.color.muted, fontSize: theme.font.small, marginTop: theme.space.sm },
-  error: { color: theme.color.danger, fontSize: theme.font.body, fontWeight: '700', textAlign: 'center' },
-});
+function createJoinInviteStyles(t: AppTheme) {
+  return StyleSheet.create({
+    centered: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: t.space.xl,
+    },
+    title: { color: t.color.text, fontSize: t.font.h1, fontWeight: '800', marginBottom: t.space.md },
+    message: { color: t.color.text, fontSize: t.font.body, textAlign: 'center', marginBottom: t.space.lg },
+    errorLine: { color: t.color.danger, fontSize: t.font.small, marginBottom: t.space.sm },
+    buttons: { width: '100%', maxWidth: 280 },
+    declineBtn: { paddingVertical: 12, alignItems: 'center' },
+    declineBtnText: { color: t.color.muted, fontSize: t.font.body },
+    muted: { color: t.color.muted, fontSize: t.font.small, marginTop: t.space.sm },
+    error: { color: t.color.danger, fontSize: t.font.body, fontWeight: '700', textAlign: 'center' },
+  });
+}

@@ -6,12 +6,15 @@ import { Screen } from '../components/Screen';
 import { auth } from '../lib/firebase';
 import { addFriendBothWays, getDevicePhoneNumbersE164, matchUsersByPhoneNumbers, MatchedUser } from '../services/friends';
 import { getUserProfile } from '../services/userProfile';
-import { theme } from '../theme';
+import { useAppTheme } from '../ThemeContext';
+import type { AppTheme } from '../theme';
 import { maskPhone } from '../utils/phone';
 
 type Row = MatchedUser & { status: 'add' | 'added' | 'self' };
 
 export function FriendInviteScreen(props: { onDone: () => void }) {
+  const appTheme = useAppTheme();
+  const styles = useMemo(() => createFriendInviteStyles(appTheme), [appTheme]);
   const currentUid = auth.currentUser?.uid;
   const [permission, setPermission] = useState<Contacts.PermissionStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -91,9 +94,9 @@ export function FriendInviteScreen(props: { onDone: () => void }) {
           <Text style={styles.cardSub}>
             Arkadaşlarını otomatik bulmak için rehberine erişmemiz gerekiyor. İstersen daha sonra da açabilirsin.
           </Text>
-          <View style={{ height: theme.space.md }} />
+          <View style={{ height: appTheme.space.md }} />
           <PrimaryButton title="Rehbere eriş" onPress={requestPermission} />
-          <View style={{ height: theme.space.sm }} />
+          <View style={{ height: appTheme.space.sm }} />
           <Text onPress={props.onDone} style={styles.skip}>
             Şimdilik geç
           </Text>
@@ -154,7 +157,7 @@ export function FriendInviteScreen(props: { onDone: () => void }) {
 
           <View style={styles.bottom}>
             <PrimaryButton title="Rota planlamaya geç" onPress={props.onDone} />
-            <View style={{ height: theme.space.sm }} />
+            <View style={{ height: appTheme.space.sm }} />
             <Text onPress={refresh} style={styles.refresh}>
               Yenile
             </Text>
@@ -165,74 +168,76 @@ export function FriendInviteScreen(props: { onDone: () => void }) {
   );
 }
 
-const styles = StyleSheet.create({
-  header: { gap: 6, marginBottom: theme.space.md },
-  title: { color: theme.color.text, fontSize: theme.font.h2, fontWeight: '900' },
-  sub: { color: theme.color.muted, fontSize: theme.font.body, lineHeight: 22 },
-  error: { color: theme.color.danger, fontSize: theme.font.small, fontWeight: '700', marginBottom: theme.space.sm },
-  card: {
-    marginTop: theme.space.lg,
-    backgroundColor: theme.color.surface,
-    borderRadius: theme.radius.lg,
-    padding: theme.space.lg,
-    borderWidth: 1,
-    borderColor: theme.color.border,
-  },
-  cardTitle: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '800', marginBottom: 6 },
-  cardSub: { color: theme.color.muted, fontSize: theme.font.body, lineHeight: 22 },
-  skip: {
-    color: theme.color.muted,
-    fontSize: theme.font.small,
-    textAlign: 'center',
-    textDecorationLine: 'underline',
-  },
-  listCard: {
-    flex: 1,
-    backgroundColor: theme.color.surface,
-    borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.color.border,
-    overflow: 'hidden',
-  },
-  loading: { padding: theme.space.lg, alignItems: 'center', gap: 12 },
-  loadingText: { color: theme.color.muted, fontSize: theme.font.small, fontWeight: '700' },
-  empty: { padding: theme.space.lg, gap: 8 },
-  emptyTitle: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '800' },
-  emptySub: { color: theme.color.muted, fontSize: theme.font.small, lineHeight: 18 },
-  row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12, gap: 12 },
-  avatar: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: theme.color.primarySoft,
-    borderWidth: 1,
-    borderColor: theme.color.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarText: { color: theme.color.text, fontWeight: '900' },
-  name: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '800' },
-  phone: { color: theme.color.muted, fontSize: theme.font.small, marginTop: 2 },
-  addBtn: {
-    backgroundColor: theme.color.primarySoft,
-    borderWidth: 1,
-    borderColor: theme.color.border,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: theme.radius.pill,
-  },
-  addBtnText: { color: theme.color.text, fontWeight: '800', fontSize: theme.font.small },
-  addedPill: {
-    backgroundColor: 'rgba(74,222,128,0.18)',
-    borderWidth: 1,
-    borderColor: theme.color.border,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: theme.radius.pill,
-  },
-  addedText: { color: theme.color.text, fontWeight: '800', fontSize: theme.font.small },
-  sep: { height: 1, backgroundColor: theme.color.subtle, marginLeft: 14 },
-  bottom: { paddingTop: theme.space.md },
-  refresh: { color: theme.color.muted, fontSize: theme.font.small, textAlign: 'center', textDecorationLine: 'underline' },
-});
+function createFriendInviteStyles(t: AppTheme) {
+  return StyleSheet.create({
+    header: { gap: 6, marginBottom: t.space.md },
+    title: { color: t.color.text, fontSize: t.font.h2, fontWeight: '900' },
+    sub: { color: t.color.muted, fontSize: t.font.body, lineHeight: 22 },
+    error: { color: t.color.danger, fontSize: t.font.small, fontWeight: '700', marginBottom: t.space.sm },
+    card: {
+      marginTop: t.space.lg,
+      backgroundColor: t.color.surface,
+      borderRadius: t.radius.lg,
+      padding: t.space.lg,
+      borderWidth: 1,
+      borderColor: t.color.border,
+    },
+    cardTitle: { color: t.color.text, fontSize: t.font.body, fontWeight: '800', marginBottom: 6 },
+    cardSub: { color: t.color.muted, fontSize: t.font.body, lineHeight: 22 },
+    skip: {
+      color: t.color.muted,
+      fontSize: t.font.small,
+      textAlign: 'center',
+      textDecorationLine: 'underline',
+    },
+    listCard: {
+      flex: 1,
+      backgroundColor: t.color.surface,
+      borderRadius: t.radius.lg,
+      borderWidth: 1,
+      borderColor: t.color.border,
+      overflow: 'hidden',
+    },
+    loading: { padding: t.space.lg, alignItems: 'center', gap: 12 },
+    loadingText: { color: t.color.muted, fontSize: t.font.small, fontWeight: '700' },
+    empty: { padding: t.space.lg, gap: 8 },
+    emptyTitle: { color: t.color.text, fontSize: t.font.body, fontWeight: '800' },
+    emptySub: { color: t.color.muted, fontSize: t.font.small, lineHeight: 18 },
+    row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12, gap: 12 },
+    avatar: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      backgroundColor: t.color.primarySoft,
+      borderWidth: 1,
+      borderColor: t.color.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    avatarText: { color: t.color.text, fontWeight: '900' },
+    name: { color: t.color.text, fontSize: t.font.body, fontWeight: '800' },
+    phone: { color: t.color.muted, fontSize: t.font.small, marginTop: 2 },
+    addBtn: {
+      backgroundColor: t.color.primarySoft,
+      borderWidth: 1,
+      borderColor: t.color.border,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: t.radius.pill,
+    },
+    addBtnText: { color: t.color.text, fontWeight: '800', fontSize: t.font.small },
+    addedPill: {
+      backgroundColor: 'rgba(74,222,128,0.18)',
+      borderWidth: 1,
+      borderColor: t.color.border,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: t.radius.pill,
+    },
+    addedText: { color: t.color.text, fontWeight: '800', fontSize: t.font.small },
+    sep: { height: 1, backgroundColor: t.color.subtle, marginLeft: 14 },
+    bottom: { paddingTop: t.space.md },
+    refresh: { color: t.color.muted, fontSize: t.font.small, textAlign: 'center', textDecorationLine: 'underline' },
+  });
+}
 

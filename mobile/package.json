@@ -4,9 +4,9 @@
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
+    "android": "expo run:android",
     "android:tunnel": "expo start --android --tunnel",
-    "ios": "expo start --ios",
+    "ios": "expo run:ios",
     "web": "expo start --web"
   },
   "dependencies": {
@@ -17,8 +17,9 @@
     "date-fns": "^4.1.0",
     "expo": "~55.0.6",
     "expo-clipboard": "~55.0.8",
+    "expo-constants": "~55.0.9",
     "expo-contacts": "~55.0.8",
-    "expo-firebase-recaptcha": "^2.3.1",
+    "expo-linear-gradient": "~55.0.9",
     "expo-status-bar": "~55.0.4",
     "firebase": "^12.10.0",
     "react": "19.2.0",

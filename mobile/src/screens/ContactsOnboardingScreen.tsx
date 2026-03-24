@@ -1,14 +1,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Contacts from 'expo-contacts';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
-import { theme } from '../theme';
+import { useAppTheme } from '../ThemeContext';
+import type { AppTheme } from '../theme';
 
 export const CONTACTS_ONBOARDING_SEEN_KEY = 'rw.contactsOnboardingSeen.v1';
 
 export function ContactsOnboardingScreen(props: { onDone: () => void }) {
+  const appTheme = useAppTheme();
+  const styles = useMemo(() => createContactsOnboardingStyles(appTheme), [appTheme]);
   const [loading, setLoading] = useState(false);
 
   async function finishAndContinue() {
@@ -41,7 +44,7 @@ export function ContactsOnboardingScreen(props: { onDone: () => void }) {
 
       <View style={styles.card}>
         <PrimaryButton title="Erişime izin ver" onPress={requestPermission} loading={loading} />
-        <View style={{ height: theme.space.sm }} />
+        <View style={{ height: appTheme.space.sm }} />
         <Text onPress={finishAndContinue} style={styles.skip}>
           Şimdilik atla
         </Text>
@@ -50,33 +53,34 @@ export function ContactsOnboardingScreen(props: { onDone: () => void }) {
   );
 }
 
-const styles = StyleSheet.create({
-  hero: { gap: 10, marginBottom: theme.space.lg },
-  badge: {
-    alignSelf: 'flex-start',
-    backgroundColor: theme.color.primarySoft,
-    borderRadius: theme.radius.pill,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: theme.color.border,
-  },
-  badgeText: { color: theme.color.text, fontSize: theme.font.small, fontWeight: '700' },
-  title: { color: theme.color.text, fontSize: theme.font.h1, fontWeight: '900', letterSpacing: 0.1 },
-  sub: { color: theme.color.muted, fontSize: theme.font.body, lineHeight: 22 },
-  card: {
-    marginTop: 'auto',
-    backgroundColor: theme.color.surface,
-    borderRadius: theme.radius.lg,
-    padding: theme.space.lg,
-    borderWidth: 1,
-    borderColor: theme.color.border,
-  },
-  skip: {
-    color: theme.color.muted,
-    fontSize: theme.font.small,
-    textAlign: 'center',
-    textDecorationLine: 'underline',
-  },
-});
-
+function createContactsOnboardingStyles(t: AppTheme) {
+  return StyleSheet.create({
+    hero: { gap: 10, marginBottom: t.space.lg },
+    badge: {
+      alignSelf: 'flex-start',
+      backgroundColor: t.color.primarySoft,
+      borderRadius: t.radius.pill,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderWidth: 1,
+      borderColor: t.color.border,
+    },
+    badgeText: { color: t.color.text, fontSize: t.font.small, fontWeight: '700' },
+    title: { color: t.color.text, fontSize: t.font.h1, fontWeight: '900', letterSpacing: 0.1 },
+    sub: { color: t.color.muted, fontSize: t.font.body, lineHeight: 22 },
+    card: {
+      marginTop: 'auto',
+      backgroundColor: t.color.surface,
+      borderRadius: t.radius.lg,
+      padding: t.space.lg,
+      borderWidth: 1,
+      borderColor: t.color.border,
+    },
+    skip: {
+      color: t.color.muted,
+      fontSize: t.font.small,
+      textAlign: 'center',
+      textDecorationLine: 'underline',
+    },
+  });
+}

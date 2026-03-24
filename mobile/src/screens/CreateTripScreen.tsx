@@ -1,19 +1,45 @@
-import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { AddPlaceModal } from '../components/AddPlaceModal';
 import { DatePickerField } from '../components/DatePickerField';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
 import { TextField } from '../components/TextField';
+import { TimePickerField } from '../components/TimePickerField';
 import { auth } from '../lib/firebase';
-import { createTrip } from '../services/trips';
-import { theme } from '../theme';
+import { addStop, createTrip } from '../services/trips';
+import type { PlacesSearchMode } from '../services/places';
+import { useAppTheme } from '../ThemeContext';
+import type { AppTheme } from '../theme';
+import { normalizePlanTime } from '../utils/planTime';
 
-export function CreateTripScreen(props: { onCreated: (tripId: string) => void; onBack: () => void }) {
+export function CreateTripScreen(props: {
+  onCreated: (tripId: string, opts?: { skipAddPlaceModal?: boolean }) => void;
+  onBack: () => void;
+}) {
+  const appTheme = useAppTheme();
+  const styles = useMemo(() => createCreateTripStyles(appTheme), [appTheme]);
   const [title, setTitle] = useState('');
   const [startDate, setStartDate] = useState<Date | null>(null);
   const [endDate, setEndDate] = useState<Date | null>(null);
   const [error, setError] = useState<string | undefined>();
   const [loading, setLoading] = useState(false);
+  const [placePickerOpen, setPlacePickerOpen] = useState(false);
+  const [placesMode, setPlacesMode] = useState<PlacesSearchMode>('all');
+  const [firstStop, setFirstStop] = useState<{
+    locationName: string;
+    coords: { latitude: number; longitude: number };
+  } | null>(null);
+  const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
 
   function toISODate(d: Date) {
     const y = d.getFullYear();
@@ -24,9 +50,12 @@ export function CreateTripScreen(props: { onCreated: (tripId: string) => void; o
 
   async function submit() {
     setError(undefined);
-    const t = title.trim();
-    if (!t) {
-      setError('Rota adı girin.');
+    let tripTitle = title.trim();
+    if (!tripTitle && firstStop) {
+      tripTitle = firstStop.locationName;
+    }
+    if (!tripTitle) {
+      setError('Rota adı girin veya aşağıdan bir başlangıç noktası seçin.');
       return;
     }
     if (!startDate) {
@@ -41,6 +70,16 @@ export function CreateTripScreen(props: { onCreated: (tripId: string) => void; o
       setError('Bitiş tarihi başlangıçtan önce olamaz.');
       return;
     }
+    const stNorm = startTime.trim() ? normalizePlanTime(startTime) : undefined;
+    const etNorm = endTime.trim() ? normalizePlanTime(endTime) : undefined;
+    if (startTime.trim() && !stNorm) {
+      setError('Başlangıç saati HH:mm olmalı (örn. 09:00).');
+      return;
+    }
+    if (endTime.trim() && !etNorm) {
+      setError('Bitiş saati HH:mm olmalı (örn. 20:00).');
+      return;
+    }
     const uid = auth.currentUser?.uid;
     if (!uid) {
       setError('Oturum bulunamadı.');
@@ -50,11 +89,23 @@ export function CreateTripScreen(props: { onCreated: (tripId: string) => void; o
     try {
       const tripId = await createTrip({
         adminId: uid,
-        title: t,
+        title: tripTitle,
         startDate: toISODate(startDate),
         endDate: toISODate(endDate),
+        startTime: stNorm,
+        endTime: etNorm,
       });
-      props.onCreated(tripId);
+      if (firstStop) {
+        await addStop({
+          tripId,
+          locationName: firstStop.locationName,
+          createdBy: uid,
+          status: 'approved',
+          coords: firstStop.coords,
+          order: 0,
+        });
+      }
+      props.onCreated(tripId, { skipAddPlaceModal: !!firstStop });
     } catch (e: any) {
       setError(e?.message || 'Rota oluşturulamadı.');
     } finally {
@@ -64,25 +115,74 @@ export function CreateTripScreen(props: { onCreated: (tripId: string) => void; o
 
   return (
     <Screen>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <Pressable onPress={props.onBack} style={styles.backRow}>
-          <Text style={styles.backText}>← Geri</Text>
-        </Pressable>
-        <View style={styles.header}>
-          <Text style={styles.title}>Yeni rota</Text>
-          <Text style={styles.sub}>Rota adı ve tarih aralığını girin.</Text>
-        </View>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{ flex: 1 }}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
+      >
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          nestedScrollEnabled
+        >
+          <Pressable onPress={props.onBack} style={styles.backRow}>
+            <Text style={styles.backText}>← Geri</Text>
+          </Pressable>
+          <View style={styles.header}>
+            <Text style={styles.heroEmoji}>🎒</Text>
+            <Text style={styles.title}>Yeni aktivite / rota</Text>
+            <Text style={styles.sub}>
+              Google Places ile işletme, şehir veya adres ara; ilk durağı seçebilirsin. Rota adı boşsa seçtiğin yer
+              adı kullanılır.
+            </Text>
+          </View>
 
-        <View style={styles.card}>
+          <View style={styles.card}>
+          <Text style={styles.blockTitle}>Başlangıç noktası (isteğe bağlı)</Text>
+          {firstStop ? (
+            <View style={styles.selectedPlace}>
+              <Text style={styles.selectedPlaceText}>{firstStop.locationName}</Text>
+              <Pressable onPress={() => setFirstStop(null)}>
+                <Text style={styles.clearPlace}>Kaldır</Text>
+              </Pressable>
+            </View>
+          ) : null}
+          <View style={styles.modeRow}>
+            {(
+              [
+                { key: 'all' as const, label: 'Tümü' },
+                { key: 'regions' as const, label: 'İl / ilçe' },
+                { key: 'geocode' as const, label: 'Adres' },
+              ]
+            ).map((m) => (
+              <Pressable
+                key={m.key}
+                onPress={() => setPlacesMode(m.key)}
+                style={[styles.modeChip, placesMode === m.key && styles.modeChipActive]}
+              >
+                <Text style={[styles.modeChipText, placesMode === m.key && styles.modeChipTextActive]}>
+                  {m.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+          <PrimaryButton
+            title="📍 Haritadan yer ara"
+            variant="accent"
+            onPress={() => setPlacePickerOpen(true)}
+          />
+          <View style={{ height: appTheme.space.md }} />
+
           <TextField
             label="Rota adı"
             value={title}
-            placeholder="Örn. Bolu hafta sonu"
+            placeholder="Örn. Bolu hafta sonu (veya sadece yer seç)"
             onChangeText={setTitle}
             errorText={error}
-            autoFocus
           />
-          <View style={{ height: theme.space.sm }} />
+          <View style={{ height: appTheme.space.sm }} />
           <DatePickerField
             label="Başlangıç tarihi"
             value={startDate}
@@ -91,32 +191,97 @@ export function CreateTripScreen(props: { onCreated: (tripId: string) => void; o
               if (d && endDate && endDate.getTime() < d.getTime()) setEndDate(d);
             }}
           />
-          <View style={{ height: theme.space.sm }} />
+          <View style={{ height: appTheme.space.sm }} />
           <DatePickerField
             label="Bitiş tarihi"
             value={endDate}
             minDate={startDate ?? undefined}
             onChange={setEndDate}
           />
-          <View style={{ height: theme.space.md }} />
-          <PrimaryButton title="Oluştur" onPress={submit} loading={loading} />
-        </View>
+          <View style={{ height: appTheme.space.sm }} />
+          <TimePickerField
+            label="Plan başlangıç saati (opsiyonel)"
+            value={startTime}
+            onChange={setStartTime}
+            allowClear
+            helperText="Bu gezi için günlük başlangıç saati."
+          />
+          <View style={{ height: appTheme.space.sm }} />
+          <TimePickerField
+            label="Plan bitiş saati (opsiyonel)"
+            value={endTime}
+            onChange={setEndTime}
+            allowClear
+            helperText="Gün içi bitiş veya dönüş."
+          />
+          <View style={{ height: appTheme.space.md }} />
+          <PrimaryButton title="🚀 Planı oluştur" onPress={submit} loading={loading} />
+          </View>
+        </ScrollView>
       </KeyboardAvoidingView>
+
+      <AddPlaceModal
+        visible={placePickerOpen}
+        searchMode={placesMode}
+        onClose={() => setPlacePickerOpen(false)}
+        onAdd={async (params) => {
+          setFirstStop(params);
+          setPlacePickerOpen(false);
+        }}
+      />
     </Screen>
   );
 }
 
-const styles = StyleSheet.create({
-  backRow: { alignSelf: 'flex-start', paddingVertical: 4, paddingRight: 8, marginBottom: theme.space.sm },
-  backText: { color: theme.color.primary, fontSize: theme.font.body, fontWeight: '700' },
-  header: { gap: 8, marginBottom: theme.space.lg },
-  title: { color: theme.color.text, fontSize: theme.font.h1, fontWeight: '800' },
-  sub: { color: theme.color.muted, fontSize: theme.font.body, lineHeight: 22 },
-  card: {
-    backgroundColor: theme.color.surface,
-    borderRadius: theme.radius.lg,
-    padding: theme.space.lg,
-    borderWidth: 1,
-    borderColor: theme.color.border,
-  },
-});
+function createCreateTripStyles(t: AppTheme) {
+  return StyleSheet.create({
+    scrollContent: {
+      flexGrow: 1,
+      paddingBottom: t.space.xl * 2,
+    },
+    backRow: { alignSelf: 'flex-start', paddingVertical: 4, paddingRight: 8, marginBottom: t.space.sm },
+    backText: { color: t.color.primary, fontSize: t.font.body, fontWeight: '700' },
+    header: { gap: 8, marginBottom: t.space.lg, alignItems: 'center' },
+    heroEmoji: { fontSize: 44, marginBottom: 4 },
+    title: { color: t.color.text, fontSize: t.font.hero, fontWeight: '900', textAlign: 'center' },
+    sub: {
+      color: t.color.muted,
+      fontSize: t.font.body,
+      lineHeight: 22,
+      textAlign: 'center',
+      paddingHorizontal: t.space.sm,
+    },
+    card: {
+      backgroundColor: t.color.surface,
+      borderRadius: t.radius.xl,
+      padding: t.space.lg,
+      borderWidth: 1,
+      borderColor: t.color.cardBorderPrimary,
+      ...t.shadowCard,
+    },
+    blockTitle: { color: t.color.text, fontSize: t.font.body, fontWeight: '700', marginBottom: t.space.sm },
+    selectedPlace: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: t.space.sm,
+      borderRadius: t.radius.md,
+      backgroundColor: t.color.inputBg,
+      marginBottom: t.space.sm,
+    },
+    selectedPlaceText: { color: t.color.text, fontSize: t.font.body, flex: 1 },
+    clearPlace: { color: t.color.danger, fontSize: t.font.small, fontWeight: '700' },
+    modeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: t.space.sm },
+    modeChip: {
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: t.radius.pill,
+      borderWidth: 1,
+      borderColor: t.color.border,
+      backgroundColor: t.color.inputBg,
+    },
+    modeChipActive: { borderColor: t.color.primary, backgroundColor: t.color.primarySoft },
+    modeChipText: { color: t.color.muted, fontSize: t.font.small, fontWeight: '600' },
+    modeChipTextActive: { color: t.color.text },
+  });
+}

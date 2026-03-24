@@ -1,4 +1,8 @@
 PROJE DOSYASI: RouteWise (Social & Intelligent Travel Planner)
+
+**Revizyon (aktivite planlayıcı):** Ana ekranda “Arkadaşlarım ve gruplar” merkezi; rota oluştururken Google Places ile il/ilçe/işletme/adres araması ve ilk durak; duraklar arası mesafe/süre (Directions veya Haversine); durak başına ekstra masraf ve kalış süresi özeti; rota bazlı araç/tüketim/yakıt fiyatı; plan özeti (yakıt + ekstra + genel toplam, kişi başı); editörlerin durak değişikliklerini **öneri** olarak göndermesi ve rota sahibinin onaylaması. Ayrıntılı ücret/API bilgisi: `mobile/ÜCRETLER_VE_API.md`.
+
+---
 1. Proje Özeti ve Vizyon
 RouteWise, kullanıcıların sadece bir rota çizmekle kalmayıp, bu rotayı arkadaş gruplarıyla demokratik ve interaktif bir şekilde yönetebildiği bir mobil uygulamadır. Uygulama; lojistik hesaplamaları (yakıt, zaman, mesafe), akıllı mekan önerilerini ve grup içi onay mekanizmalı sosyal özellikleri bir araya getirir.
 

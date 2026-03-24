@@ -6,7 +6,8 @@ import { Screen } from '../components/Screen';
 import { TextField } from '../components/TextField';
 import { auth } from '../lib/firebase';
 import { ensureUserDoc } from '../services/userProfile';
-import { theme } from '../theme';
+import { useAppTheme } from '../ThemeContext';
+import type { AppTheme } from '../theme';
 import { maskPhone } from '../utils/phone';
 
 export function OtpVerifyScreen(props: {
@@ -14,6 +15,8 @@ export function OtpVerifyScreen(props: {
   verificationId: string;
   onVerified: () => void;
 }) {
+  const appTheme = useAppTheme();
+  const styles = useMemo(() => createOtpStyles(appTheme), [appTheme]);
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | undefined>();
   const [loading, setLoading] = useState(false);
@@ -62,7 +65,7 @@ export function OtpVerifyScreen(props: {
             maxLength={6}
           />
 
-          <View style={{ height: theme.space.md }} />
+          <View style={{ height: appTheme.space.md }} />
           <PrimaryButton title="Devam et" onPress={verify} loading={loading} />
         </View>
       </KeyboardAvoidingView>
@@ -70,16 +73,17 @@ export function OtpVerifyScreen(props: {
   );
 }
 
-const styles = StyleSheet.create({
-  header: { gap: 8, marginBottom: theme.space.lg },
-  title: { color: theme.color.text, fontSize: theme.font.h2, fontWeight: '800' },
-  sub: { color: theme.color.muted, fontSize: theme.font.body, lineHeight: 22 },
-  card: {
-    backgroundColor: theme.color.surface,
-    borderRadius: theme.radius.lg,
-    padding: theme.space.lg,
-    borderWidth: 1,
-    borderColor: theme.color.border,
-  },
-});
-
+function createOtpStyles(t: AppTheme) {
+  return StyleSheet.create({
+    header: { gap: 8, marginBottom: t.space.lg },
+    title: { color: t.color.text, fontSize: t.font.h2, fontWeight: '800' },
+    sub: { color: t.color.muted, fontSize: t.font.body, lineHeight: 22 },
+    card: {
+      backgroundColor: t.color.surface,
+      borderRadius: t.radius.lg,
+      padding: t.space.lg,
+      borderWidth: 1,
+      borderColor: t.color.border,
+    },
+  });
+}

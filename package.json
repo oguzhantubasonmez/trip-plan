@@ -1,0 +1,13 @@
+{
+  "name": "rota",
+  "private": true,
+  "description": "RouteWise – Expo uygulaması mobile/ klasöründe. Komutları buradan veya cd mobile ile çalıştır.",
+  "scripts": {
+    "start": "npm --prefix mobile run start",
+    "android": "npm --prefix mobile run android",
+    "android:tunnel": "npm --prefix mobile run android:tunnel",
+    "ios": "npm --prefix mobile run ios",
+    "web": "npm --prefix mobile run web",
+    "eas": "cd mobile && npx eas-cli"
+  }
+}

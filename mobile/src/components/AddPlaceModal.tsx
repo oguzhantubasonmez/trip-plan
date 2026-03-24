@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -11,8 +11,13 @@ import {
 import { PrimaryButton } from './PrimaryButton';
 import { TextField } from './TextField';
 import { getPlaceDetails, searchPlaces } from '../services/places';
-import type { PlaceDetails as PlaceDetailsType, PlacePrediction } from '../services/places';
-import { theme } from '../theme';
+import type {
+  PlaceDetails as PlaceDetailsType,
+  PlacePrediction,
+  PlacesSearchMode,
+} from '../services/places';
+import { useAppTheme } from '../ThemeContext';
+import type { AppTheme } from '../theme';
 
 const DEBOUNCE_MS = 400;
 
@@ -20,9 +25,13 @@ type Props = {
   visible: boolean;
   onClose: () => void;
   onAdd: (params: { locationName: string; coords: { latitude: number; longitude: number } }) => Promise<void>;
+  /** all: işletme+yer, regions: il/ilçe ağırlıklı, geocode: adres satırı */
+  searchMode?: PlacesSearchMode;
 };
 
 export function AddPlaceModal(props: Props) {
+  const appTheme = useAppTheme();
+  const styles = useMemo(() => createAddPlaceStyles(appTheme), [appTheme]);
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<PlacePrediction[]>([]);
   const [loading, setLoading] = useState(false);
@@ -47,7 +56,7 @@ export function AddPlaceModal(props: Props) {
       }
       setLoading(true);
       setError(null);
-      searchPlaces(query)
+      searchPlaces(query, props.searchMode ?? 'all')
         .then(setSuggestions)
         .catch((e) => {
           setError(e?.message || 'Arama başarısız.');
@@ -56,7 +65,7 @@ export function AddPlaceModal(props: Props) {
         .finally(() => setLoading(false));
     }, DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [props.visible, query]);
+  }, [props.visible, query, props.searchMode]);
 
   const handleSelect = useCallback(async (placeId: string) => {
     setLoadingDetails(true);
@@ -100,8 +109,10 @@ export function AddPlaceModal(props: Props) {
       <Pressable style={styles.overlay} onPress={props.onClose}>
         <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
           <View style={styles.handle} />
-          <Text style={styles.title}>Google Maps'tan yer ekle</Text>
-          <Text style={styles.sub}>Yer adı yazın (örn. Selçuk, İzmir), listeden seçin ve Ekle'ye basın.</Text>
+          <Text style={styles.title}>📍 Yer veya şehir bul</Text>
+          <Text style={styles.sub}>
+            Mekân, il veya adres ara; listeden seçip rotana ekle. Türkiye sonuçları önceliklidir.
+          </Text>
 
           <TextField
             label="Yer ara"
@@ -120,8 +131,8 @@ export function AddPlaceModal(props: Props) {
               {selected.formattedAddress ? (
                 <Text style={styles.selectedAddr}>{selected.formattedAddress}</Text>
               ) : null}
-              <View style={{ height: theme.space.md }} />
-              <PrimaryButton title="Ekle" onPress={handleAdd} loading={adding} />
+              <View style={{ height: appTheme.space.md }} />
+              <PrimaryButton title="📌 Rotaya ekle" variant="accent" onPress={handleAdd} loading={adding} />
               <Pressable onPress={() => setSelected(null)} style={styles.changeBtn}>
                 <Text style={styles.changeBtnText}>Farklı yer seç</Text>
               </Pressable>
@@ -148,58 +159,63 @@ export function AddPlaceModal(props: Props) {
             </>
           )}
 
-          <View style={{ height: theme.space.md }} />
-          <PrimaryButton title="Kapat" onPress={props.onClose} />
+          <View style={{ height: appTheme.space.md }} />
+          <PrimaryButton title="Kapat" variant="outline" onPress={props.onClose} />
         </Pressable>
       </Pressable>
     </Modal>
   );
 }
 
-const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
-  },
-  sheet: {
-    backgroundColor: theme.color.surface,
-    borderTopLeftRadius: theme.radius.lg,
-    borderTopRightRadius: theme.radius.lg,
-    padding: theme.space.lg,
-    paddingBottom: theme.space.xl + 24,
-    maxHeight: '85%',
-  },
-  handle: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: theme.color.border,
-    alignSelf: 'center',
-    marginBottom: theme.space.md,
-  },
-  title: { color: theme.color.text, fontSize: theme.font.h2, fontWeight: '800', marginBottom: 4 },
-  sub: { color: theme.color.muted, fontSize: theme.font.small, marginBottom: theme.space.md },
-  error: { color: theme.color.danger, fontSize: theme.font.small, marginVertical: theme.space.sm },
-  muted: { color: theme.color.muted, fontSize: theme.font.small, marginVertical: theme.space.sm },
-  list: { maxHeight: 220, marginVertical: theme.space.sm },
-  suggestionRow: {
-    paddingVertical: 12,
-    paddingHorizontal: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.color.subtle,
-  },
-  suggestionText: { color: theme.color.text, fontSize: theme.font.body },
-  selected: {
-    marginTop: theme.space.sm,
-    padding: theme.space.md,
-    backgroundColor: theme.color.inputBg,
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    borderColor: theme.color.border,
-  },
-  selectedName: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '800' },
-  selectedAddr: { color: theme.color.muted, fontSize: theme.font.small, marginTop: 4 },
-  changeBtn: { marginTop: theme.space.sm, alignSelf: 'flex-start' },
-  changeBtnText: { color: theme.color.primary, fontSize: theme.font.small, fontWeight: '700' },
-});
+function createAddPlaceStyles(t: AppTheme) {
+  return StyleSheet.create({
+    overlay: {
+      flex: 1,
+      backgroundColor: t.color.overlayDark,
+      justifyContent: 'flex-end',
+    },
+    sheet: {
+      backgroundColor: t.color.surface,
+      borderTopLeftRadius: t.radius.xl,
+      borderTopRightRadius: t.radius.xl,
+      padding: t.space.lg,
+      paddingBottom: t.space.xl + 24,
+      maxHeight: '85%',
+      borderTopWidth: 3,
+      borderTopColor: t.color.primary,
+      ...t.shadowCard,
+    },
+    handle: {
+      width: 48,
+      height: 5,
+      borderRadius: 3,
+      backgroundColor: t.color.primarySoft,
+      alignSelf: 'center',
+      marginBottom: t.space.md,
+    },
+    title: { color: t.color.text, fontSize: t.font.h2, fontWeight: '900', marginBottom: 4 },
+    sub: { color: t.color.muted, fontSize: t.font.small, marginBottom: t.space.md },
+    error: { color: t.color.danger, fontSize: t.font.small, marginVertical: t.space.sm },
+    muted: { color: t.color.muted, fontSize: t.font.small, marginVertical: t.space.sm },
+    list: { maxHeight: 220, marginVertical: t.space.sm },
+    suggestionRow: {
+      paddingVertical: 12,
+      paddingHorizontal: 4,
+      borderBottomWidth: 1,
+      borderBottomColor: t.color.subtle,
+    },
+    suggestionText: { color: t.color.text, fontSize: t.font.body },
+    selected: {
+      marginTop: t.space.sm,
+      padding: t.space.md,
+      backgroundColor: t.color.inputBg,
+      borderRadius: t.radius.md,
+      borderWidth: 1,
+      borderColor: t.color.border,
+    },
+    selectedName: { color: t.color.text, fontSize: t.font.body, fontWeight: '800' },
+    selectedAddr: { color: t.color.muted, fontSize: t.font.small, marginTop: 4 },
+    changeBtn: { marginTop: t.space.sm, alignSelf: 'flex-start' },
+    changeBtnText: { color: t.color.primary, fontSize: t.font.small, fontWeight: '700' },
+  });
+}

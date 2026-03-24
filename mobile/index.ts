@@ -1,6 +1,6 @@
 import { registerRootComponent } from 'expo';
 
-// Firebase must be initialized before any component (e.g. RecaptchaVerifier) uses it
+// Firebase must be initialized before any component uses auth/db
 import './src/lib/firebase';
 
 import App from './App';

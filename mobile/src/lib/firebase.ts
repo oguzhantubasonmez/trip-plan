@@ -43,7 +43,7 @@ export const firebaseApp = getApps().length ? getApps()[0] : initializeApp(fireb
 export const auth = getAuth(firebaseApp);
 export const db = getFirestore(firebaseApp);
 
-// Web: expo-firebase-recaptcha uses firebase/compat/app and firebase.auth() — ensure compat has default app
+// Web: bazı Firebase web akışları compat bekler — varsayılan app yoksa başlat
 if (typeof window !== 'undefined') {
   try {
     const compat = require('firebase/compat/app');

@@ -4,52 +4,66 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Screen } from './src/components/Screen';
 import { auth } from './src/lib/firebase';
+import { ThemeProvider, useAppTheme, useThemeMode } from './src/ThemeContext';
 import { ContactsOnboardingScreen, CONTACTS_ONBOARDING_SEEN_KEY } from './src/screens/ContactsOnboardingScreen';
 import { CreateGroupScreen } from './src/screens/CreateGroupScreen';
 import { CreateTripScreen } from './src/screens/CreateTripScreen';
 import { FriendInviteScreen } from './src/screens/FriendInviteScreen';
+import { FriendsHubScreen } from './src/screens/FriendsHubScreen';
 import { GroupDetailScreen } from './src/screens/GroupDetailScreen';
 import { GroupsScreen } from './src/screens/GroupsScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { JoinInviteScreen } from './src/screens/JoinInviteScreen';
 import { PhoneLoginScreen } from './src/screens/PhoneLoginScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
+import { EditTripScreen } from './src/screens/EditTripScreen';
 import { TripDetailScreen } from './src/screens/TripDetailScreen';
-import { theme } from './src/theme';
+import type { RootStackParamList } from './src/navigation/types';
+import type { AppTheme } from './src/theme';
 
+/** Sadece web: mobilde `window` polyfill olabilir ama `window.location` yok → .search patlar. */
 const getInitialInviteTripId = (): string | null => {
-  if (typeof window === 'undefined') return null;
-  const p = new URLSearchParams(window.location.search);
-  const id = p.get('invite');
-  if (id) window.history.replaceState({}, '', window.location.pathname || '/');
-  return id;
+  if (Platform.OS !== 'web') return null;
+  if (typeof window === 'undefined' || !window.location) return null;
+  try {
+    const search = window.location.search;
+    if (typeof search !== 'string') return null;
+    const p = new URLSearchParams(search);
+    const id = p.get('invite');
+    if (id && typeof window.history?.replaceState === 'function') {
+      window.history.replaceState({}, '', window.location.pathname || '/');
+    }
+    return id;
+  } catch {
+    return null;
+  }
 };
 const initialInviteTripId = getInitialInviteTripId();
 
-if (typeof window !== 'undefined') {
+if (Platform.OS === 'web' && typeof window !== 'undefined') {
   require('./src/styles/web.css');
 }
-
-type RootStackParamList = {
-  PhoneLogin: undefined;
-  ContactsOnboarding: undefined;
-  FriendInvite: undefined;
-  Home: undefined;
-  JoinInvite: { tripId: string };
-  Profile: undefined;
-  Groups: undefined;
-  CreateGroup: undefined;
-  GroupDetail: { groupId: string };
-  CreateTrip: undefined;
-  TripDetail: { tripId: string; openAddPlace?: boolean };
-};
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function App() {
+  return (
+    <ThemeProvider>
+      <SafeAreaProvider>
+        <AppInner />
+      </SafeAreaProvider>
+    </ThemeProvider>
+  );
+}
+
+function AppInner() {
+  const appTheme = useAppTheme();
+  const { mode } = useThemeMode();
+  const bootStyles = useMemo(() => createBootStyles(appTheme), [appTheme]);
   const [user, setUser] = useState<User | null>(null);
   const [booting, setBooting] = useState(true);
   const [contactsOnboardingSeen, setContactsOnboardingSeen] = useState<boolean | null>(null);
@@ -83,26 +97,21 @@ export default function App() {
   if (booting || contactsOnboardingSeen === null) {
     return (
       <Screen>
-        <View style={styles.boot}>
-          <ActivityIndicator />
-          <Text style={styles.bootText}>Hazırlanıyor...</Text>
+        <View style={bootStyles.boot}>
+          <ActivityIndicator color={appTheme.color.primary} />
+          <Text style={bootStyles.bootText}>Hazırlanıyor...</Text>
         </View>
-        <StatusBar style="light" />
+        <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
       </Screen>
     );
   }
 
   return (
     <NavigationContainer>
-      <StatusBar style="light" />
+      <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
       <Stack.Navigator
         screenOptions={{ headerShown: false, animation: 'fade' }}
         initialRouteName={user ? initialSignedInRoute : 'PhoneLogin'}
-        initialParams={
-          user && initialSignedInRoute === 'JoinInvite' && initialInviteTripId
-            ? { tripId: initialInviteTripId }
-            : undefined
-        }
       >
         {!user ? (
           <>
@@ -125,10 +134,15 @@ export default function App() {
             <Stack.Screen name="FriendInvite">
               {({ navigation }) => <FriendInviteScreen onDone={() => navigation.replace('Home')} />}
             </Stack.Screen>
-            <Stack.Screen name="JoinInvite">
+            <Stack.Screen
+              name="JoinInvite"
+              initialParams={
+                initialInviteTripId ? { tripId: initialInviteTripId } : { tripId: '' }
+              }
+            >
               {({ route, navigation }) => (
                 <JoinInviteScreen
-                  tripId={route.params.tripId}
+                  tripId={route.params.tripId || initialInviteTripId || ''}
                   onJoined={(tripId) => navigation.replace('TripDetail', { tripId })}
                   onDecline={() => navigation.replace('Home')}
                 />
@@ -140,15 +154,29 @@ export default function App() {
                   onCreateTrip={() => navigation.navigate('CreateTrip')}
                   onOpenTrip={(tripId) => navigation.navigate('TripDetail', { tripId })}
                   onOpenProfile={() => navigation.navigate('Profile')}
-                  onOpenGroups={() => navigation.navigate('Groups')}
+                  onOpenFriends={() => navigation.navigate('FriendsHub')}
                 />
+              )}
+            </Stack.Screen>
+            <Stack.Screen name="FriendsHub">
+              {({ navigation }) => (
+                <FriendsHubScreen
+                  onBack={() => navigation.goBack()}
+                  onOpenGroups={() => navigation.navigate('Groups')}
+                  onOpenContactInvite={() => navigation.navigate('FriendInviteBrowse')}
+                />
+              )}
+            </Stack.Screen>
+            <Stack.Screen name="FriendInviteBrowse">
+              {({ navigation }) => (
+                <FriendInviteScreen onDone={() => navigation.goBack()} />
               )}
             </Stack.Screen>
             <Stack.Screen name="Profile">
               {({ navigation }) => (
                 <ProfileScreen
                   onBack={() => navigation.goBack()}
-                  onOpenGroups={() => navigation.navigate('Groups')}
+                  onOpenFriends={() => navigation.navigate('FriendsHub')}
                 />
               )}
             </Stack.Screen>
@@ -180,9 +208,21 @@ export default function App() {
             <Stack.Screen name="CreateTrip">
               {({ navigation }) => (
                 <CreateTripScreen
-                  onCreated={(tripId) =>
-                    navigation.replace('TripDetail', { tripId, openAddPlace: true })
+                  onCreated={(tripId, opts) =>
+                    navigation.replace('TripDetail', {
+                      tripId,
+                      openAddPlace: !opts?.skipAddPlaceModal,
+                    })
                   }
+                  onBack={() => navigation.goBack()}
+                />
+              )}
+            </Stack.Screen>
+            <Stack.Screen name="EditTrip">
+              {({ route, navigation }) => (
+                <EditTripScreen
+                  tripId={route.params.tripId}
+                  onDone={() => navigation.goBack()}
                   onBack={() => navigation.goBack()}
                 />
               )}
@@ -203,7 +243,9 @@ export default function App() {
   );
 }
 
-const styles = StyleSheet.create({
-  boot: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
-  bootText: { color: theme.color.muted, fontSize: theme.font.small, fontWeight: '700' },
-});
+function createBootStyles(theme: AppTheme) {
+  return StyleSheet.create({
+    boot: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
+    bootText: { color: theme.color.muted, fontSize: theme.font.small, fontWeight: '700' },
+  });
+}

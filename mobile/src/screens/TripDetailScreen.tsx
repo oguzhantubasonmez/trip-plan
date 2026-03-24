@@ -1,8 +1,10 @@
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useCallback, useMemo, useState } from 'react';
 import * as Clipboard from 'expo-clipboard';
 import {
   ActivityIndicator,
+  Alert,
   Modal,
   Platform,
   Pressable,
@@ -13,6 +15,8 @@ import {
   View,
 } from 'react-native';
 import { AddPlaceModal } from '../components/AddPlaceModal';
+import { DeleteStopConfirmModal } from '../components/DeleteStopConfirmModal';
+import { CollapsibleSection } from '../components/CollapsibleSection';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
 import { StopCard } from '../components/StopCard';
@@ -21,31 +25,35 @@ import { auth } from '../lib/firebase';
 import { getGroupsForUser } from '../services/groups';
 import { getUserProfile } from '../services/userProfile';
 import {
+  approveProposal,
+  createEditStopProposal,
+  getPendingProposalsForTrip,
+  rejectProposal,
+} from '../services/tripProposals';
+import {
   addAttendeeToTrip,
   addStop,
+  deleteStop,
+  deleteTrip,
   getStopsForTrip,
   getTrip,
+  recalculateLegsForTrip,
   reorderStops,
   updateAttendeeRsvp,
+  updateStopFromPayload,
   updateStopStatus,
   updateTripDistanceAndFuel,
+  updateTripVehiclePlanning,
 } from '../services/trips';
 import type { Group } from '../types/group';
 import type { Stop as StopType, Trip } from '../types/trip';
-import type { UserProfile } from '../services/userProfile';
-import { theme } from '../theme';
-
-function formatDate(s: string) {
-  try {
-    return new Date(s).toLocaleDateString('tr-TR', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-    });
-  } catch {
-    return s;
-  }
-}
+import type { EditStopPayload, TripProposal } from '../types/tripProposal';
+import type { ExpenseType, UserProfile } from '../services/userProfile';
+import { useAppTheme } from '../ThemeContext';
+import type { AppTheme } from '../theme';
+import type { RootStackParamList } from '../navigation/types';
+import { formatTripScheduleSummary } from '../utils/tripSchedule';
+import { normalizeStopExtraExpenses, stopExtraTotal } from '../utils/stopExpenses';
 
 const RSVP_LABELS: Record<string, string> = {
   going: 'Katılıyorum',
@@ -63,8 +71,7 @@ export function TripDetailScreen(props: {
   const [userProfiles, setUserProfiles] = useState<Map<string, UserProfile>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [newStopName, setNewStopName] = useState('');
-  const [adding, setAdding] = useState(false);
+  const [relocateStopId, setRelocateStopId] = useState<string | null>(null);
   const [addAttendeeModal, setAddAttendeeModal] = useState(false);
   const [friendUids, setFriendUids] = useState<string[]>([]);
   const [selectedRole, setSelectedRole] = useState<'editor' | 'viewer'>('editor');
@@ -75,7 +82,21 @@ export function TripDetailScreen(props: {
   const [copied, setCopied] = useState(false);
   const [groups, setGroups] = useState<Group[]>([]);
   const [addingGroupId, setAddingGroupId] = useState<string | null>(null);
+  const [proposals, setProposals] = useState<TripProposal[]>([]);
+  const [vehicleLabelInput, setVehicleLabelInput] = useState('');
+  const [tripConsumptionInput, setTripConsumptionInput] = useState('');
+  const [fuelPriceTripInput, setFuelPriceTripInput] = useState('');
+  const [recalculatingLegs, setRecalculatingLegs] = useState(false);
+  const [savingVehicle, setSavingVehicle] = useState(false);
+  const [proposalBusy, setProposalBusy] = useState<string | null>(null);
+  const [myExpenseTypes, setMyExpenseTypes] = useState<ExpenseType[]>([]);
+  const [planExtraBreakdownOpen, setPlanExtraBreakdownOpen] = useState(false);
+  const [deleteStopTarget, setDeleteStopTarget] = useState<StopType | null>(null);
+  const [deleteStopBusy, setDeleteStopBusy] = useState(false);
   const currentUid = auth.currentUser?.uid;
+  const appTheme = useAppTheme();
+  const styles = useMemo(() => createTripDetailStyles(appTheme), [appTheme]);
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
   const inviteUrl =
     Platform.OS === 'web' && typeof window !== 'undefined'
@@ -89,6 +110,22 @@ export function TripDetailScreen(props: {
       const [t, s] = await Promise.all([getTrip(props.tripId), getStopsForTrip(props.tripId)]);
       setTrip(t ?? null);
       setStops(s);
+      if (t) {
+        const pend = await getPendingProposalsForTrip(props.tripId);
+        setProposals(pend);
+        setVehicleLabelInput(t.vehicleLabel ?? '');
+        const meForTrip = currentUid ? await getUserProfile(currentUid) : null;
+        const cons =
+          t.tripConsumptionLPer100km != null
+            ? String(t.tripConsumptionLPer100km)
+            : meForTrip?.carConsumption
+              ? String(meForTrip.carConsumption)
+              : '';
+        setTripConsumptionInput(cons);
+        setFuelPriceTripInput(
+          t.fuelPricePerLiter != null ? String(t.fuelPricePerLiter) : ''
+        );
+      }
       if (t?.attendees?.length) {
         const uids = t.attendees.map((a) => a.uid);
         const myProfile = currentUid ? await getUserProfile(currentUid) : null;
@@ -114,6 +151,12 @@ export function TripDetailScreen(props: {
         ]);
         setFriendUids(me?.friends ?? []);
         setGroups(groupList);
+        setMyExpenseTypes(me?.expenseTypes ?? []);
+      } else if (currentUid) {
+        const me = await getUserProfile(currentUid);
+        setMyExpenseTypes(me?.expenseTypes ?? []);
+      } else {
+        setMyExpenseTypes([]);
       }
       if (t?.totalDistance != null && t.totalDistance > 0) setDistanceInput(String(t.totalDistance));
     } catch (e: any) {
@@ -140,43 +183,118 @@ export function TripDetailScreen(props: {
     [trip]
   );
 
+  const distanceFromLegs = useMemo(() => {
+    let sum = 0;
+    for (const st of stops) {
+      if (st.legFromPrevious?.distanceKm != null) sum += st.legFromPrevious.distanceKm;
+    }
+    return Math.round(sum * 10) / 10;
+  }, [stops]);
+
+  const durationFromLegs = useMemo(() => {
+    let sum = 0;
+    for (const st of stops) {
+      if (st.legFromPrevious?.durationMin != null) sum += st.legFromPrevious.durationMin;
+    }
+    return Math.round(sum);
+  }, [stops]);
+
+  const totalExtraCosts = useMemo(
+    () =>
+      Math.round(stops.reduce((s, st) => s + stopExtraTotal(st), 0) * 100) / 100,
+    [stops]
+  );
+
+  const extraCostsByCategory = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const st of stops) {
+      for (const e of normalizeStopExtraExpenses(st)) {
+        const key =
+          (e.extraExpenseTypeName && String(e.extraExpenseTypeName).trim()) || 'Tür belirtilmedi';
+        map.set(key, Math.round(((map.get(key) ?? 0) + e.amount) * 100) / 100);
+      }
+    }
+    return Array.from(map.entries())
+      .map(([name, total]) => ({ name, total }))
+      .sort((a, b) => b.total - a.total);
+  }, [stops]);
+
+  const extraBreakdownSummary = useMemo(() => {
+    if (extraCostsByCategory.length === 0) return 'Henüz ekstra masraf yok';
+    const top = extraCostsByCategory.slice(0, 3);
+    const parts = top.map((x) => `${x.name} ${x.total.toFixed(0)} ₺`);
+    const more =
+      extraCostsByCategory.length > 3 ? ` +${extraCostsByCategory.length - 3} tür` : '';
+    return `${extraCostsByCategory.length} grup · ${parts.join(' · ')}${more}`;
+  }, [extraCostsByCategory]);
+
+  const planSummaryCollapsed = useMemo(() => {
+    const fuel = trip?.totalFuelCost ?? 0;
+    const grand = Math.round((fuel + totalExtraCosts) * 100) / 100;
+    return `${stops.length} durak · ${totalExtraCosts.toFixed(0)} ₺ ekstra · ${grand.toFixed(0)} ₺ toplam`;
+  }, [trip, stops.length, totalExtraCosts]);
+
+  const stopsWithCoordsCount = useMemo(
+    () =>
+      stops.filter((s) => s.coords?.latitude != null && s.coords?.longitude != null).length,
+    [stops]
+  );
+
   const displayName = (uid: string) =>
     userProfiles.get(uid)?.displayName?.trim() || userProfiles.get(uid)?.phoneNumber || uid.slice(0, 8);
 
-  async function handleAddStop() {
-    const name = newStopName.trim();
-    if (!name || !currentUid) return;
-    setAdding(true);
-    try {
-      await addStop({
-        tripId: props.tripId,
-        locationName: name,
-        createdBy: currentUid,
-        status: trip?.adminId === currentUid ? 'approved' : 'pending',
-        order: stops.length,
-      });
-      setNewStopName('');
-      await load();
-    } catch (e: any) {
-      setError(e?.message || 'Durak eklenemedi.');
-    } finally {
-      setAdding(false);
-    }
-  }
-
-  async function handleAddPlace(params: {
+  async function handlePlacePicked(params: {
     locationName: string;
     coords: { latitude: number; longitude: number };
   }) {
-    if (!currentUid) return;
-    await addStop({
-      tripId: props.tripId,
-      locationName: params.locationName,
-      createdBy: currentUid,
-      status: trip?.adminId === currentUid ? 'approved' : 'pending',
-      coords: params.coords,
-      order: stops.length,
-    });
+    const relocating = relocateStopId;
+    setRelocateStopId(null);
+    setAddPlaceModalVisible(false);
+    if (!currentUid || !trip) return;
+
+    if (relocating) {
+      const isTripAdmin = trip.adminId === currentUid;
+      const myRole = trip.attendees.find((a) => a.uid === currentUid)?.role ?? 'viewer';
+      const isEditor = myRole === 'editor';
+      const canPropose = isEditor && !isTripAdmin;
+      setError(null);
+      try {
+        if (isTripAdmin) {
+          await updateStopFromPayload(relocating, {
+            locationName: params.locationName,
+            coords: params.coords,
+          });
+          await recalculateLegsForTrip(props.tripId);
+        } else if (canPropose) {
+          await handleProposeChange(relocating, {
+            locationName: params.locationName,
+            coords: params.coords,
+          });
+        }
+      } catch (e: any) {
+        setError(e?.message || 'Konum güncellenemedi.');
+      }
+      await load();
+      return;
+    }
+
+    try {
+      await addStop({
+        tripId: props.tripId,
+        locationName: params.locationName,
+        createdBy: currentUid,
+        status: trip.adminId === currentUid ? 'approved' : 'pending',
+        coords: params.coords,
+        order: stops.length,
+      });
+      try {
+        await recalculateLegsForTrip(props.tripId);
+      } catch (e: any) {
+        setError(e?.message || 'Yol mesafeleri güncellenemedi (Routes API / anahtar).');
+      }
+    } catch (e: any) {
+      setError(e?.message || 'Durak eklenemedi.');
+    }
     await load();
   }
 
@@ -197,8 +315,46 @@ export function TripDetailScreen(props: {
     [newOrder[index], newOrder[swap]] = [newOrder[swap], newOrder[index]];
     try {
       await reorderStops(props.tripId, newOrder.map((s) => s.stopId));
+      try {
+        await recalculateLegsForTrip(props.tripId);
+      } catch (e: any) {
+        setError(e?.message || 'Yol mesafeleri güncellenemedi (Routes API / anahtar).');
+      }
       await load();
     } catch (_) {}
+  }
+
+  function openDeleteStopModal(stop: StopType) {
+    if (trip?.adminId !== currentUid) return;
+    setDeleteStopTarget(stop);
+  }
+
+  async function executeDeleteStop() {
+    const stop = deleteStopTarget;
+    if (!stop || trip?.adminId !== currentUid) return;
+    setDeleteStopBusy(true);
+    setError(null);
+    try {
+      await deleteStop(stop.stopId);
+      const rest = await getStopsForTrip(props.tripId);
+      if (rest.length > 0) {
+        await reorderStops(
+          props.tripId,
+          rest.map((s) => s.stopId)
+        );
+      }
+      try {
+        await recalculateLegsForTrip(props.tripId);
+      } catch (e: any) {
+        setError(e?.message || 'Yol mesafeleri güncellenemedi (Routes API / anahtar).');
+      }
+      setDeleteStopTarget(null);
+      await load();
+    } catch (e: any) {
+      setError(e?.message || 'Durak silinemedi.');
+    } finally {
+      setDeleteStopBusy(false);
+    }
   }
 
   async function handleCopyInviteLink() {
@@ -253,23 +409,120 @@ export function TripDetailScreen(props: {
     } catch (_) {}
   }
 
-  async function handleSaveCost() {
-    const dist = parseFloat(distanceInput.replace(',', '.'));
-    const fuelPrice = parseFloat(fuelPriceInput.replace(',', '.'));
-    if (!trip || isNaN(dist) || dist < 0) return;
-    const myProfile = currentUid ? await getUserProfile(currentUid) : null;
-    const consumption = myProfile?.carConsumption ? parseFloat(String(myProfile.carConsumption).replace(',', '.')) : NaN;
-    let totalFuelCost = 0;
+  async function handleProposeChange(stopId: string, payload: EditStopPayload) {
+    if (!currentUid) return;
+    await createEditStopProposal({
+      tripId: props.tripId,
+      stopId,
+      proposedBy: currentUid,
+      payload,
+    });
+  }
+
+  async function handleApproveProposal(proposalId: string) {
+    setProposalBusy(proposalId);
+    try {
+      await approveProposal(proposalId);
+      try {
+        await recalculateLegsForTrip(props.tripId);
+      } catch (e: any) {
+        setError(e?.message || 'Yol mesafeleri güncellenemedi (Routes API / anahtar).');
+      }
+      await load();
+    } catch (e: any) {
+      setError(e?.message || 'Onaylanamadı.');
+    } finally {
+      setProposalBusy(null);
+    }
+  }
+
+  async function handleRejectProposal(proposalId: string) {
+    setProposalBusy(proposalId);
+    try {
+      await rejectProposal(proposalId);
+      await load();
+    } catch (_) {
+    } finally {
+      setProposalBusy(null);
+    }
+  }
+
+  async function handleRecalculateLegs() {
+    setRecalculatingLegs(true);
+    setError(null);
+    try {
+      const r = await recalculateLegsForTrip(props.tripId);
+      if (!r) {
+        setError('En az iki durakta haritadan seçilmiş konum olmalı. Durak eklerken yer araması kullan.');
+      } else {
+        setDistanceInput(String(r.totalKm));
+      }
+      await load();
+    } catch (e: any) {
+      setError(e?.message || 'Bacaklar hesaplanamadı.');
+    } finally {
+      setRecalculatingLegs(false);
+    }
+  }
+
+  function confirmDeleteTrip() {
+    Alert.alert(
+      'Rotayı sil',
+      'Bu rota ve tüm durakları kalıcı olarak silinir. Katılımcılar da erişemez. Emin misin?',
+      [
+        { text: 'İptal', style: 'cancel' },
+        {
+          text: 'Sil',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteTrip(props.tripId);
+              navigation.navigate('Home');
+            } catch (e: any) {
+              setError(e?.message || 'Rota silinemedi.');
+            }
+          },
+        },
+      ]
+    );
+  }
+
+  async function handleSaveVehicleAndFuel() {
+    if (!trip) return;
+    const distManual = parseFloat(distanceInput.replace(',', '.'));
+    const fuelPrice = parseFloat(
+      (fuelPriceTripInput || fuelPriceInput).replace(',', '.')
+    );
+    const consumption = parseFloat(tripConsumptionInput.replace(',', '.'));
+    const dist =
+      distanceFromLegs > 0 ? distanceFromLegs : !isNaN(distManual) && distManual > 0 ? distManual : NaN;
+    if (isNaN(dist) || dist < 0) {
+      setError('Mesafe: bacakları güncelle veya km gir.');
+      return;
+    }
+    let totalFuelCost = trip.totalFuelCost ?? 0;
     if (!isNaN(fuelPrice) && fuelPrice >= 0 && !isNaN(consumption) && consumption > 0) {
       totalFuelCost = (dist / 100) * consumption * fuelPrice;
     }
+    setSavingVehicle(true);
     setSavingCost(true);
     try {
-      await updateTripDistanceAndFuel(props.tripId, dist, Math.round(totalFuelCost * 100) / 100);
+      await updateTripVehiclePlanning(props.tripId, {
+        vehicleLabel: vehicleLabelInput.trim() || undefined,
+        tripConsumptionLPer100km: !isNaN(consumption) ? consumption : undefined,
+        fuelPricePerLiter: !isNaN(fuelPrice) ? fuelPrice : undefined,
+        totalDistance: dist,
+        totalFuelCost: Math.round(totalFuelCost * 100) / 100,
+      });
       await load();
     } finally {
+      setSavingVehicle(false);
       setSavingCost(false);
     }
+  }
+
+  async function handleSaveCost() {
+    await handleSaveVehicleAndFuel();
   }
 
   const perPersonFuel =
@@ -281,7 +534,7 @@ export function TripDetailScreen(props: {
     return (
       <Screen>
         <View style={styles.centered}>
-          <ActivityIndicator />
+          <ActivityIndicator color={appTheme.color.primary} />
           <Text style={styles.muted}>Yükleniyor...</Text>
         </View>
       </Screen>
@@ -293,7 +546,7 @@ export function TripDetailScreen(props: {
       <Screen>
         <View style={styles.centered}>
           <Text style={styles.error}>Rota bulunamadı.</Text>
-          <View style={{ height: theme.space.md }} />
+          <View style={{ height: appTheme.space.md }} />
           <PrimaryButton title="Geri" onPress={props.onBack} />
         </View>
       </Screen>
@@ -301,105 +554,128 @@ export function TripDetailScreen(props: {
   }
 
   const isAdmin = trip.adminId === currentUid;
+  const myRole = trip.attendees.find((a) => a.uid === currentUid)?.role ?? 'viewer';
+  const isEditor = myRole === 'editor';
+  const canAddStops = isAdmin || isEditor;
+  const canManageParticipants = isAdmin || isEditor;
+  const editorCanPropose = isEditor && !isAdmin;
+
+  function formatDrivingDuration(totalMin: number): string {
+    if (totalMin <= 0) return '–';
+    if (totalMin < 60) return `~${totalMin} dk`;
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    return m > 0 ? `~${h} sa ${m} dk` : `~${h} sa`;
+  }
+
+  const fuelCostNum = trip.totalFuelCost ?? 0;
+  const grandTotalCost = Math.round((fuelCostNum + totalExtraCosts) * 100) / 100;
+  const perPersonGrand =
+    goingCount > 0 && grandTotalCost > 0
+      ? Math.round((grandTotalCost / goingCount) * 100) / 100
+      : null;
+
+  const kmDisplay =
+    distanceFromLegs > 0
+      ? `~${distanceFromLegs} km`
+      : trip.totalDistance != null && trip.totalDistance > 0
+        ? `${trip.totalDistance} km`
+        : '–';
+  const timeDisplay =
+    durationFromLegs > 0 ? formatDrivingDuration(durationFromLegs) : '–';
+
+  function proposalSummary(p: TripProposal): string {
+    const x = p.payload;
+    const parts: string[] = [];
+    if (x.locationName) parts.push(`Ad: ${x.locationName}`);
+    if (x.arrivalTime || x.departureTime)
+      parts.push(`Saat: ${x.arrivalTime ?? '–'} – ${x.departureTime ?? '–'}`);
+    if (x.extraExpenses && Array.isArray(x.extraExpenses) && x.extraExpenses.length > 0) {
+      const t = x.extraExpenses.reduce(
+        (s, e: { amount?: number }) => s + (typeof e?.amount === 'number' && !isNaN(e.amount) ? e.amount : 0),
+        0
+      );
+      parts.push(`Masraf: ${x.extraExpenses.length} satır · ${Math.round(t * 100) / 100} TL`);
+    } else if (x.cost != null) {
+      parts.push(`Masraf: ${x.cost} TL`);
+    }
+    if (x.extraExpenseTypeName) parts.push(`Tür: ${x.extraExpenseTypeName}`);
+    if (x.coords) parts.push(`Konum güncellemesi`);
+    return parts.join(' · ') || 'Değişiklik';
+  }
+
+  function stopNameForProposal(stopId: string): string {
+    return stops.find((s) => s.stopId === stopId)?.locationName ?? 'Durak';
+  }
 
   return (
     <Screen>
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: theme.space.xl }}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        removeClippedSubviews={Platform.OS === 'android' ? false : undefined}
+      >
         <View style={styles.header}>
           <Pressable onPress={props.onBack} style={styles.backRow}>
-            <Text style={styles.backText}>← Geri</Text>
+            <Text style={styles.backText}>‹ Geri</Text>
           </Pressable>
-          <Text style={styles.title}>{trip.title}</Text>
-          <Text style={styles.dates}>
-            {formatDate(trip.startDate)} – {formatDate(trip.endDate)}
+          <Text style={styles.tripEmoji}>🧭</Text>
+          <Text style={styles.title} numberOfLines={3}>
+            {trip.title}
           </Text>
-          {trip.totalDistance != null && trip.totalDistance > 0 && (
-            <Text style={styles.muted}>Toplam: {trip.totalDistance} km</Text>
+          {(() => {
+            const sched = formatTripScheduleSummary(
+              trip.startDate,
+              trip.endDate,
+              trip.startTime,
+              trip.endTime
+            );
+            const showExtraTimeLine =
+              sched.timeLine != null &&
+              sched.combinedLine === sched.dateLine &&
+              Boolean(trip.startTime?.trim() || trip.endTime?.trim());
+            return (
+              <>
+                <Text style={styles.scheduleCombined}>📅 {sched.combinedLine}</Text>
+                {showExtraTimeLine ? (
+                  <Text style={styles.planTimes}>🕐 {sched.timeLine}</Text>
+                ) : null}
+              </>
+            );
+          })()}
+          {isAdmin && (
+            <View style={styles.adminTripActions}>
+              <View style={styles.adminTripBtnHalf}>
+                <PrimaryButton
+                  title="✏️ Düzenle"
+                  onPress={() => navigation.navigate('EditTrip', { tripId: props.tripId })}
+                />
+              </View>
+              <View style={styles.adminTripBtnHalf}>
+                <PrimaryButton title="🗑️ Sil" variant="danger" onPress={confirmDeleteTrip} />
+              </View>
+            </View>
           )}
         </View>
 
         {error ? <Text style={styles.errorLine}>{error}</Text> : null}
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Duraklar</Text>
-          <View style={styles.mapAddRow}>
-            <PrimaryButton
-              title="Google Maps'tan yer ekle"
-              onPress={() => setAddPlaceModalVisible(true)}
-            />
-          </View>
-          <View style={styles.addRow}>
-            <View style={{ flex: 1 }}>
-              <TextField
-                label=""
-                value={newStopName}
-                placeholder="Yeni durak adı"
-                onChangeText={setNewStopName}
-              />
-            </View>
-            <View style={{ width: theme.space.sm }} />
-            <PrimaryButton
-              title="Ekle"
-              onPress={handleAddStop}
-              loading={adding}
-              disabled={!newStopName.trim()}
-            />
-          </View>
-          {stops.length === 0 ? (
-            <View style={styles.empty}>
-              <Text style={styles.muted}>Henüz durak yok. Yukarıdan ekleyebilirsin.</Text>
-            </View>
-          ) : (
-            <>
-              {stops.map((item, index) => (
-                <View key={item.stopId} style={styles.stopRow}>
-                  {isAdmin && (
-                    <View style={styles.orderBtns}>
-                      <Pressable
-                        onPress={() => handleMoveStop(index, 'up')}
-                        disabled={index === 0}
-                        style={[styles.orderBtn, index === 0 && styles.orderBtnDisabled]}
-                      >
-                        <Text style={styles.orderBtnText}>↑</Text>
-                      </Pressable>
-                      <Pressable
-                        onPress={() => handleMoveStop(index, 'down')}
-                        disabled={index === stops.length - 1}
-                        style={[
-                          styles.orderBtn,
-                          index === stops.length - 1 && styles.orderBtnDisabled,
-                        ]}
-                      >
-                        <Text style={styles.orderBtnText}>↓</Text>
-                      </Pressable>
-                    </View>
-                  )}
-                  <View style={{ flex: 1 }}>
-                    <StopCard
-                      stop={item}
-                      isAdmin={isAdmin}
-                      currentUid={currentUid}
-                      userProfiles={userProfiles}
-                      displayName={displayName}
-                      onToggleStatus={() => handleToggleStopStatus(item)}
-                      onRefresh={load}
-                    />
-                  </View>
-                </View>
-              ))}
-            </>
-          )}
-        </View>
-
-        <View style={styles.section}>
-          <View style={styles.sectionRow}>
-            <Text style={styles.sectionTitle}>Katılımcılar</Text>
-            {isAdmin && friendsNotInTrip.length > 0 && (
+        <CollapsibleSection
+          title="Katılımcılar"
+          collapsedSummary={`${trip.attendees.length} kişi · ${goingCount} katılıyor`}
+          defaultOpen={false}
+          compact
+          smallTitle
+          containerStyle={styles.section}
+          headerRight={
+            canManageParticipants ? (
               <Pressable onPress={() => setAddAttendeeModal(true)} style={styles.linkBtn}>
-                <Text style={styles.linkBtnText}>+ Ekle</Text>
+                <Text style={styles.linkBtnText}>+ Katılımcı ekle</Text>
               </Pressable>
-            )}
-          </View>
+            ) : null
+          }
+        >
           <View style={styles.inviteRow}>
             <Pressable onPress={handleCopyInviteLink} style={styles.inviteBtn}>
               <Text style={styles.inviteBtnText}>
@@ -425,10 +701,7 @@ export function TripDetailScreen(props: {
                     <Pressable
                       key={r}
                       onPress={() => handleSetRsvp(r)}
-                      style={[
-                        styles.rsvpBtn,
-                        a.rsvp === r ? styles.rsvpBtnActive : null,
-                      ]}
+                      style={[styles.rsvpBtn, a.rsvp === r ? styles.rsvpBtnActive : null]}
                     >
                       <Text style={styles.rsvpBtnText}>{RSVP_LABELS[r]}</Text>
                     </Pressable>
@@ -437,34 +710,67 @@ export function TripDetailScreen(props: {
               )}
             </View>
           ))}
-        </View>
+        </CollapsibleSection>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Yakıt ve maliyet</Text>
-          <Text style={styles.muted}>
-            Toplam mesafe (km) ve yakıt fiyatı (TL/L) gir. Profildeki araç tüketimi (L/100 km) kullanılır.
+        <CollapsibleSection
+          title="Araç ve yakıt"
+          collapsedSummary={
+            trip.vehicleLabel?.trim()
+              ? `${trip.vehicleLabel.trim()} · yakıt ${fuelCostNum.toFixed(0)} ₺`
+              : `Yakıt ${fuelCostNum.toFixed(0)} ₺ · ${
+                  distanceFromLegs > 0
+                    ? `~${distanceFromLegs} km`
+                    : trip.totalDistance != null && trip.totalDistance > 0
+                      ? `${trip.totalDistance} km`
+                      : 'mesafe —'
+                }`
+          }
+          defaultOpen={false}
+          compact
+          containerStyle={styles.section}
+        >
+          <Text style={styles.mutedCompact}>
+            Mesafe önce duraklardan; yoksa aşağıdaki km alanı kullanılır.
           </Text>
-          <View style={{ height: theme.space.sm }} />
+          <View style={styles.fieldSpacer} />
           <TextField
-            label="Toplam mesafe (km)"
+            label="Araç (etiket)"
+            value={vehicleLabelInput}
+            placeholder="Örn. SUV, babanın arabası"
+            onChangeText={setVehicleLabelInput}
+          />
+          <View style={styles.fieldSpacer} />
+          <TextField
+            label="Tüketim (L/100 km)"
+            value={tripConsumptionInput}
+            placeholder="Örn. 7"
+            keyboardType="number-pad"
+            onChangeText={setTripConsumptionInput}
+          />
+          <View style={styles.fieldSpacer} />
+          <TextField
+            label="Yakıt fiyatı (TL/L)"
+            value={fuelPriceTripInput || fuelPriceInput}
+            placeholder="Örn. 38"
+            keyboardType="number-pad"
+            onChangeText={(v) => {
+              setFuelPriceTripInput(v);
+              setFuelPriceInput(v);
+            }}
+          />
+          <View style={styles.fieldSpacer} />
+          <TextField
+            label="Toplam mesafe (km) — bacak yoksa"
             value={distanceInput}
-            placeholder="Örn. 350"
+            placeholder={distanceFromLegs > 0 ? `Bacaklar: ${distanceFromLegs} km` : 'Örn. 350'}
             keyboardType="number-pad"
             onChangeText={setDistanceInput}
           />
-          <View style={{ height: theme.space.sm }} />
-          <TextField
-            label="Yakıt fiyatı (TL/L)"
-            value={fuelPriceInput}
-            placeholder="Örn. 38"
-            keyboardType="number-pad"
-            onChangeText={setFuelPriceInput}
-          />
-          <View style={{ height: theme.space.sm }} />
+          <View style={styles.fieldSpacer} />
           <PrimaryButton
-            title="Hesapla ve kaydet"
+            title="Araç ve yakıtı kaydet"
             onPress={handleSaveCost}
-            loading={savingCost}
+            loading={savingCost || savingVehicle}
           />
           {trip.totalFuelCost != null && trip.totalFuelCost > 0 && (
             <View style={styles.costResult}>
@@ -476,16 +782,233 @@ export function TripDetailScreen(props: {
               )}
             </View>
           )}
-        </View>
+        </CollapsibleSection>
 
-        {stops.some((s) => s.coords?.latitude != null && s.coords?.longitude != null) ? (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Harita</Text>
+        <CollapsibleSection
+          title="Plan özeti"
+          collapsedSummary={planSummaryCollapsed}
+          defaultOpen={false}
+          compact
+          containerStyle={styles.section}
+        >
+          <Text style={styles.planStatsOneLine} numberOfLines={2}>
+            {`📏 ${kmDisplay}  ·  ⏱ ${timeDisplay}  ·  📍 ${stops.length} durak`}
+          </Text>
+          <View style={styles.planCostRow}>
+            <View style={[styles.planCostCard, styles.planCostCardExtra]}>
+              <Text style={styles.planCostLabel}>Ekstra</Text>
+              <Text style={styles.planCostValue}>{totalExtraCosts.toFixed(2)} ₺</Text>
+            </View>
+            <View style={[styles.planCostCard, styles.planCostCardFuel]}>
+              <Text style={styles.planCostLabel}>Yakıt</Text>
+              <Text style={styles.planCostValue}>{fuelCostNum.toFixed(2)} ₺</Text>
+            </View>
+            <View style={[styles.planCostCard, styles.planCostCardTotal]}>
+              <Text style={styles.planCostLabel}>Toplam</Text>
+              <Text style={styles.planCostValueStrong}>{grandTotalCost.toFixed(2)} ₺</Text>
+            </View>
+          </View>
+
+          <Pressable
+            onPress={() => setPlanExtraBreakdownOpen((o) => !o)}
+            style={({ pressed }) => [
+              styles.extraBreakdownHeader,
+              pressed ? { opacity: 0.92 } : null,
+            ]}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: planExtraBreakdownOpen }}
+          >
+            <Text style={styles.extraBreakdownTitle}>
+              Masraf türleri {planExtraBreakdownOpen ? '▲' : '▼'}
+            </Text>
+            {!planExtraBreakdownOpen ? (
+              <Text style={styles.extraBreakdownPreview} numberOfLines={2}>
+                {extraBreakdownSummary}
+              </Text>
+            ) : null}
+          </Pressable>
+          {planExtraBreakdownOpen && totalExtraCosts > 0 ? (
+            <View style={styles.extraBreakdownList}>
+              {extraCostsByCategory.map((row) => (
+                <View key={row.name} style={styles.extraBreakdownRow}>
+                  <Text style={styles.extraBreakdownName} numberOfLines={2}>
+                    {row.name}
+                  </Text>
+                  <Text style={styles.extraBreakdownAmount}>{row.total.toFixed(2)} ₺</Text>
+                </View>
+              ))}
+            </View>
+          ) : planExtraBreakdownOpen && totalExtraCosts <= 0 ? (
+            <Text style={styles.mutedCompact}>Bu rotada ekstra masraf yok.</Text>
+          ) : null}
+
+          {perPersonGrand != null && (
+            <Text style={styles.planPerPerson}>
+              Kişi başı · {goingCount} katılıyor: {perPersonGrand.toFixed(2)} ₺
+            </Text>
+          )}
+          {(isAdmin || isEditor) && (
+            <>
+              <View style={styles.blockSpacer} />
+              <PrimaryButton
+                title={recalculatingLegs ? 'Hesaplanıyor...' : 'Duraklar arası mesafe/süre güncelle'}
+                onPress={handleRecalculateLegs}
+                loading={recalculatingLegs}
+                disabled={recalculatingLegs}
+              />
+            </>
+          )}
+        </CollapsibleSection>
+
+        {isAdmin && proposals.length > 0 && (
+          <CollapsibleSection
+            title="Onay bekleyen öneriler"
+            collapsedSummary={`${proposals.length} öneri`}
+            defaultOpen
+            compact
+            containerStyle={styles.section}
+          >
+            {proposals.map((p) => (
+              <View key={p.proposalId} style={styles.proposalCard}>
+                <Text style={styles.proposalTitle}>
+                  {displayName(p.proposedBy)} · {stopNameForProposal(p.stopId)}
+                </Text>
+                <Text style={styles.mutedCompact}>{proposalSummary(p)}</Text>
+                <View style={styles.proposalActions}>
+                  <Pressable
+                    onPress={() => handleApproveProposal(p.proposalId)}
+                    disabled={proposalBusy !== null}
+                    style={styles.approveBtn}
+                  >
+                    <Text style={styles.approveBtnText}>
+                      {proposalBusy === p.proposalId ? '...' : 'Onayla'}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => handleRejectProposal(p.proposalId)}
+                    disabled={proposalBusy !== null}
+                    style={styles.rejectBtn}
+                  >
+                    <Text style={styles.rejectBtnText}>Reddet</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ))}
+          </CollapsibleSection>
+        )}
+
+        <CollapsibleSection
+          title="Duraklar"
+          collapsedSummary={
+            stops.length === 0 ? 'Henüz durak yok' : `${stops.length} durak`
+          }
+          defaultOpen={false}
+          compact
+          containerStyle={styles.section}
+          headerRight={
+            canAddStops ? (
+              <Pressable onPress={() => setAddPlaceModalVisible(true)} style={styles.linkBtn}>
+                <Text style={styles.linkBtnText}>+ Durak</Text>
+              </Pressable>
+            ) : null
+          }
+        >
+          {canAddStops ? (
+            <View style={styles.mapAddRow}>
+              <PrimaryButton
+                title="📍 Durak ekle"
+                variant="accent"
+                onPress={() => setAddPlaceModalVisible(true)}
+              />
+            </View>
+          ) : (
+            <Text style={styles.mutedCompact}>
+              İzleyici olarak durak ekleyemezsin; yorum yapabilirsin.
+            </Text>
+          )}
+          {stops.length === 0 ? (
+            <View style={styles.empty}>
+              <Text style={styles.muted}>Henüz durak yok. Yukarıdan yer arayarak ekleyebilirsin.</Text>
+            </View>
+          ) : (
+            <>
+              {stops.map((item, index) => (
+                <View key={item.stopId} style={styles.stopChainBlock}>
+                  <View style={styles.stopBlock}>
+                    <View style={styles.stopRow}>
+                      {isAdmin && (
+                        <View style={styles.orderBtns}>
+                          <Pressable
+                            onPress={() => handleMoveStop(index, 'up')}
+                            disabled={index === 0}
+                            style={[styles.orderBtn, index === 0 && styles.orderBtnDisabled]}
+                          >
+                            <Text style={styles.orderBtnText}>↑</Text>
+                          </Pressable>
+                          <Pressable
+                            onPress={() => handleMoveStop(index, 'down')}
+                            disabled={index === stops.length - 1}
+                            style={[
+                              styles.orderBtn,
+                              index === stops.length - 1 && styles.orderBtnDisabled,
+                            ]}
+                          >
+                            <Text style={styles.orderBtnText}>↓</Text>
+                          </Pressable>
+                        </View>
+                      )}
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <StopCard
+                          stop={item}
+                          stopIndex={index}
+                          expenseTypes={myExpenseTypes}
+                          isAdmin={isAdmin}
+                          canProposeChanges={editorCanPropose}
+                          currentUid={currentUid}
+                          userProfiles={userProfiles}
+                          displayName={displayName}
+                          onToggleStatus={() => handleToggleStopStatus(item)}
+                          onRefresh={load}
+                          onProposeChange={
+                            editorCanPropose ? handleProposeChange : undefined
+                          }
+                          onRelocateWithSearch={
+                            isAdmin || editorCanPropose
+                              ? () => setRelocateStopId(item.stopId)
+                              : undefined
+                          }
+                          onLongPressDelete={
+                            isAdmin ? () => openDeleteStopModal(item) : undefined
+                          }
+                        />
+                      </View>
+                    </View>
+                  </View>
+                  {index < stops.length - 1 ? (
+                    <View style={styles.stopRouteLink} pointerEvents="none">
+                      <View style={styles.stopRouteLinkBar} />
+                      <Text style={styles.stopRouteLinkArrow}>↓</Text>
+                      <View style={styles.stopRouteLinkBar} />
+                    </View>
+                  ) : null}
+                </View>
+              ))}
+            </>
+          )}
+        </CollapsibleSection>
+
+        {stopsWithCoordsCount > 0 ? (
+          <CollapsibleSection
+            title="Harita"
+            collapsedSummary={`${stopsWithCoordsCount} konum · dokunarak aç`}
+            defaultOpen={false}
+            compact
+            containerStyle={styles.section}
+          >
             {Platform.OS === 'web' ? (
               <View style={styles.mapPlaceholder}>
-                <Text style={styles.muted}>
-                  Harita görünümü Android ve iOS uygulamasında açılır. Web'de durak konumlarını
-                  kaydettikten sonra mobilde rotayı haritada görebilirsin.
+                <Text style={styles.mutedCompact}>
+                  Harita Android ve iOS’ta. Web’de konumları kaydedip mobilde görebilirsin.
                 </Text>
               </View>
             ) : (
@@ -496,7 +1019,7 @@ export function TripDetailScreen(props: {
                 })()}
               </View>
             )}
-          </View>
+          </CollapsibleSection>
         ) : null}
       </ScrollView>
 
@@ -555,7 +1078,10 @@ export function TripDetailScreen(props: {
 
             <Text style={styles.modalSectionTitle}>Tek tek arkadaş ekle</Text>
             {friendsNotInTrip.length === 0 ? (
-              <Text style={styles.muted}>Eklenebilir arkadaş yok.</Text>
+              <Text style={styles.muted}>
+                Arkadaş listende rotada olmayan kimse yok. Profilden arkadaş ekleyebilir veya davet linkiyle
+                yeni kişileri çağırabilirsin.
+              </Text>
             ) : (
               friendsNotInTrip.slice(0, 20).map((uid) => (
                 <Pressable
@@ -568,126 +1094,325 @@ export function TripDetailScreen(props: {
                 </Pressable>
               ))
             )}
-            <View style={{ height: theme.space.md }} />
+            <View style={{ height: appTheme.space.md }} />
             <PrimaryButton title="Kapat" onPress={() => setAddAttendeeModal(false)} />
           </Pressable>
         </Pressable>
       </Modal>
 
       <AddPlaceModal
-        visible={addPlaceModalVisible}
-        onClose={() => setAddPlaceModalVisible(false)}
-        onAdd={handleAddPlace}
+        visible={addPlaceModalVisible || relocateStopId !== null}
+        onClose={() => {
+          setAddPlaceModalVisible(false);
+          setRelocateStopId(null);
+        }}
+        onAdd={handlePlacePicked}
+      />
+
+      <DeleteStopConfirmModal
+        visible={deleteStopTarget !== null}
+        locationName={deleteStopTarget?.locationName ?? ''}
+        busy={deleteStopBusy}
+        onCancel={() => {
+          if (!deleteStopBusy) setDeleteStopTarget(null);
+        }}
+        onConfirm={executeDeleteStop}
       />
     </Screen>
   );
 }
 
-const styles = StyleSheet.create({
-  header: { gap: 4, marginBottom: theme.space.lg },
-  backRow: { alignSelf: 'flex-start', paddingVertical: 4, paddingRight: 8 },
-  backText: { color: theme.color.primary, fontSize: theme.font.body, fontWeight: '700' },
-  title: { color: theme.color.text, fontSize: theme.font.h1, fontWeight: '800' },
-  dates: { color: theme.color.muted, fontSize: theme.font.body },
-  section: {
-    backgroundColor: theme.color.surface,
-    borderRadius: theme.radius.lg,
-    padding: theme.space.lg,
-    borderWidth: 1,
-    borderColor: theme.color.border,
-    marginBottom: theme.space.md,
-  },
-  sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: theme.space.sm },
-  sectionTitle: { color: theme.color.text, fontSize: theme.font.h2, fontWeight: '800' },
-  mapAddRow: { marginBottom: theme.space.sm },
-  linkBtn: { paddingVertical: 4, paddingHorizontal: 8 },
-  linkBtnText: { color: theme.color.primary, fontSize: theme.font.small, fontWeight: '700' },
-  inviteRow: { flexDirection: 'row', gap: theme.space.sm, marginBottom: theme.space.sm, flexWrap: 'wrap' },
-  inviteBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: theme.radius.pill,
-    borderWidth: 1,
-    borderColor: theme.color.border,
-    backgroundColor: theme.color.inputBg,
-  },
-  inviteBtnText: { color: theme.color.primary, fontSize: theme.font.small, fontWeight: '700' },
-  addRow: { flexDirection: 'row', alignItems: 'flex-end', marginBottom: theme.space.sm },
-  empty: { paddingVertical: theme.space.lg },
-  stopRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: theme.space.sm, gap: theme.space.sm },
-  orderBtns: { flexDirection: 'column', gap: 2 },
-  orderBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: theme.radius.sm,
-    borderWidth: 1,
-    borderColor: theme.color.border,
-    backgroundColor: theme.color.inputBg,
-  },
-  orderBtnDisabled: { opacity: 0.4 },
-  orderBtnText: { color: theme.color.muted, fontSize: theme.font.small, fontWeight: '700' },
-  attendeeRow: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: theme.color.subtle },
-  attendeeName: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '700' },
-  attendeeMeta: { color: theme.color.muted, fontSize: theme.font.small, marginTop: 2 },
-  rsvpRow: { flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' },
-  rsvpBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: theme.radius.pill,
-    borderWidth: 1,
-    borderColor: theme.color.border,
-    backgroundColor: theme.color.inputBg,
-  },
-  rsvpBtnActive: { backgroundColor: theme.color.primarySoft, borderColor: theme.color.primary },
-  rsvpBtnText: { color: theme.color.text, fontSize: theme.font.small, fontWeight: '700' },
-  costResult: { marginTop: theme.space.md, gap: 4 },
-  costLine: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '700' },
-  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
-  muted: { color: theme.color.muted, fontSize: theme.font.small },
-  error: { color: theme.color.danger, fontSize: theme.font.body, fontWeight: '700' },
-  errorLine: { color: theme.color.danger, fontSize: theme.font.small, marginBottom: theme.space.sm },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: theme.space.lg,
-  },
-  modalContent: {
-    backgroundColor: theme.color.surface,
-    borderRadius: theme.radius.lg,
-    padding: theme.space.lg,
-    borderWidth: 1,
-    borderColor: theme.color.border,
-    width: '100%',
-    maxWidth: 400,
-  },
-  modalTitle: { color: theme.color.text, fontSize: theme.font.h2, fontWeight: '800', marginBottom: theme.space.sm },
-  modalSectionTitle: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '700', marginTop: theme.space.md, marginBottom: theme.space.xs },
-  modalDivider: { height: 1, backgroundColor: theme.color.subtle, marginVertical: theme.space.sm },
-  groupRow: { flexDirection: 'row', alignItems: 'center', gap: theme.space.sm, marginBottom: theme.space.sm },
-  groupRowName: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '700' },
-  roleRow: { flexDirection: 'row', gap: 8, marginBottom: theme.space.md },
-  roleBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: theme.radius.pill,
-    borderWidth: 1,
-    borderColor: theme.color.border,
-    backgroundColor: theme.color.inputBg,
-  },
-  roleBtnActive: { backgroundColor: theme.color.primarySoft },
-  roleBtnText: { color: theme.color.text, fontSize: theme.font.small, fontWeight: '700' },
-  friendRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.color.subtle,
-  },
-  friendName: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '700' },
-  friendAdd: { color: theme.color.primary, fontSize: theme.font.small, fontWeight: '700' },
-  mapPlaceholder: { paddingVertical: theme.space.lg },
-  mapContainer: { borderRadius: theme.radius.md, overflow: 'hidden' },
-});
+function createTripDetailStyles(t: AppTheme) {
+  return StyleSheet.create({
+    scrollContent: {
+      paddingBottom: t.space.lg,
+      paddingHorizontal: t.space.xs,
+    },
+    header: { gap: 4, marginBottom: t.space.sm },
+    backRow: { alignSelf: 'flex-start', paddingVertical: 4, paddingHorizontal: 4 },
+    backText: { color: t.color.primaryDark, fontSize: t.font.body, fontWeight: '800' },
+    tripEmoji: { fontSize: 28, marginTop: 2 },
+    title: { color: t.color.text, fontSize: t.font.h1, fontWeight: '900', letterSpacing: -0.3 },
+    scheduleCombined: {
+      color: t.color.text,
+      fontSize: t.font.small,
+      fontWeight: '800',
+      marginTop: 2,
+      lineHeight: 20,
+    },
+    planTimes: { color: t.color.textSecondary, fontSize: t.font.tiny, fontWeight: '700', marginTop: 4 },
+    adminTripActions: {
+      marginTop: t.space.sm,
+      alignSelf: 'stretch',
+      width: '100%',
+      maxWidth: 480,
+      flexDirection: 'row',
+      gap: 8,
+    },
+    adminTripBtnHalf: { flex: 1, minWidth: 0 },
+    section: {
+      backgroundColor: t.color.surface,
+      borderRadius: t.radius.lg,
+      paddingVertical: t.space.sm,
+      paddingHorizontal: t.space.md,
+      borderWidth: 1,
+      borderColor: t.color.sectionBorder,
+      marginBottom: t.space.sm,
+      ...t.shadowCard,
+    },
+    sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: t.space.sm },
+    sectionTitle: {
+      color: t.color.text,
+      fontSize: t.font.h2,
+      fontWeight: '900',
+      letterSpacing: -0.2,
+    },
+    fieldSpacer: { height: 8 },
+    blockSpacer: { height: t.space.sm },
+    mutedCompact: {
+      color: t.color.muted,
+      fontSize: t.font.tiny,
+      lineHeight: 18,
+    },
+    planStatsOneLine: {
+      color: t.color.text,
+      fontSize: t.font.small,
+      fontWeight: '700',
+      marginBottom: t.space.sm,
+      lineHeight: 20,
+    },
+    summaryLine: { color: t.color.text, fontSize: t.font.body, marginTop: 4 },
+    summaryStrong: {
+      color: t.color.text,
+      fontSize: t.font.h2,
+      fontWeight: '800',
+      marginTop: t.space.sm,
+    },
+    planCostRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 2 },
+    planCostCard: {
+      flex: 1,
+      minWidth: 88,
+      borderRadius: t.radius.md,
+      paddingVertical: 10,
+      paddingHorizontal: t.space.sm,
+      borderWidth: 1,
+    },
+    planCostCardExtra: {
+      backgroundColor: t.color.accentSoft,
+      borderColor: t.color.accent,
+    },
+    planCostCardFuel: {
+      backgroundColor: 'rgba(14, 165, 233, 0.12)',
+      borderColor: t.color.ocean,
+    },
+    planCostCardTotal: {
+      backgroundColor: t.color.inputBg,
+      borderColor: t.color.primary,
+    },
+    planCostLabel: { fontSize: 10, fontWeight: '800', color: t.color.muted },
+    planCostValue: { fontSize: t.font.small, fontWeight: '800', color: t.color.text, marginTop: 4 },
+    planCostValueStrong: { fontSize: t.font.h2, fontWeight: '900', color: t.color.text, marginTop: 4 },
+    planPerPerson: {
+      marginTop: t.space.sm,
+      fontSize: t.font.tiny,
+      fontWeight: '700',
+      color: t.color.textSecondary,
+      textAlign: 'center',
+    },
+    extraBreakdownHeader: {
+      marginTop: t.space.sm,
+      paddingVertical: 8,
+      paddingHorizontal: t.space.sm,
+      borderRadius: t.radius.md,
+      borderWidth: 1,
+      borderColor: t.color.border,
+      backgroundColor: t.color.inputBg,
+    },
+    extraBreakdownTitle: {
+      color: t.color.text,
+      fontSize: t.font.small,
+      fontWeight: '800',
+    },
+    extraBreakdownPreview: {
+      color: t.color.muted,
+      fontSize: t.font.tiny,
+      fontWeight: '600',
+      marginTop: 4,
+      lineHeight: 18,
+    },
+    extraBreakdownList: {
+      marginTop: 8,
+      gap: 6,
+    },
+    extraBreakdownRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: t.space.sm,
+      paddingVertical: 8,
+      paddingHorizontal: t.space.sm,
+      borderRadius: t.radius.sm,
+      borderWidth: 1,
+      borderColor: t.color.subtle,
+      backgroundColor: t.color.surface,
+    },
+    extraBreakdownName: {
+      flex: 1,
+      color: t.color.text,
+      fontSize: t.font.small,
+      fontWeight: '700',
+    },
+    extraBreakdownAmount: {
+      color: t.color.text,
+      fontSize: t.font.body,
+      fontWeight: '900',
+    },
+    proposalCard: {
+      borderWidth: 1,
+      borderColor: t.color.border,
+      borderRadius: t.radius.md,
+      padding: t.space.sm,
+      marginBottom: t.space.sm,
+    },
+    proposalTitle: { color: t.color.text, fontSize: t.font.body, fontWeight: '700' },
+    proposalActions: { flexDirection: 'row', gap: t.space.sm, marginTop: t.space.sm },
+    approveBtn: {
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      borderRadius: t.radius.pill,
+      backgroundColor: t.color.primarySoft,
+      borderWidth: 1,
+      borderColor: t.color.primary,
+    },
+    approveBtnText: { color: t.color.text, fontSize: t.font.small, fontWeight: '700' },
+    rejectBtn: { paddingHorizontal: 14, paddingVertical: 8 },
+    rejectBtnText: { color: t.color.danger, fontSize: t.font.small, fontWeight: '700' },
+    mapAddRow: { marginTop: t.space.sm, marginBottom: t.space.xs },
+    linkBtn: { paddingVertical: 4, paddingHorizontal: 8 },
+    linkBtnText: { color: t.color.primary, fontSize: t.font.small, fontWeight: '700' },
+    inviteRow: { flexDirection: 'row', gap: t.space.sm, marginBottom: t.space.sm, flexWrap: 'wrap' },
+    inviteBtn: {
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderRadius: t.radius.pill,
+      borderWidth: 1,
+      borderColor: t.color.border,
+      backgroundColor: t.color.inputBg,
+    },
+    inviteBtnText: { color: t.color.primary, fontSize: t.font.small, fontWeight: '700' },
+    addRow: { flexDirection: 'row', alignItems: 'flex-end', marginBottom: t.space.sm },
+    empty: { paddingVertical: t.space.lg },
+    stopChainBlock: { marginBottom: 0 },
+    stopBlock: { marginBottom: 0 },
+    stopRouteLink: {
+      alignItems: 'center',
+      paddingVertical: 2,
+      marginBottom: 2,
+    },
+    stopRouteLinkBar: {
+      width: 2,
+      height: 10,
+      borderRadius: 1,
+      backgroundColor: t.color.primary,
+      opacity: 0.45,
+    },
+    stopRouteLinkArrow: {
+      color: t.color.primaryDark,
+      fontSize: 16,
+      fontWeight: '900',
+      lineHeight: 20,
+      marginVertical: -1,
+    },
+    stopRow: { flexDirection: 'row', alignItems: 'flex-start', gap: t.space.sm },
+    orderBtns: { flexDirection: 'column', gap: 2 },
+    orderBtn: {
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: t.radius.sm,
+      borderWidth: 1,
+      borderColor: t.color.border,
+      backgroundColor: t.color.inputBg,
+    },
+    orderBtnDisabled: { opacity: 0.4 },
+    orderBtnText: { color: t.color.muted, fontSize: t.font.small, fontWeight: '700' },
+    attendeeRow: { paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: t.color.subtle },
+    attendeeName: { color: t.color.text, fontSize: t.font.body, fontWeight: '700' },
+    attendeeMeta: { color: t.color.muted, fontSize: t.font.small, marginTop: 2 },
+    rsvpRow: { flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' },
+    rsvpBtn: {
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: t.radius.pill,
+      borderWidth: 1,
+      borderColor: t.color.border,
+      backgroundColor: t.color.inputBg,
+    },
+    rsvpBtnActive: { backgroundColor: t.color.primarySoft, borderColor: t.color.primary },
+    rsvpBtnText: { color: t.color.text, fontSize: t.font.small, fontWeight: '700' },
+    costResult: {
+      marginTop: t.space.md,
+      gap: 6,
+      padding: t.space.md,
+      backgroundColor: t.color.accentSoft,
+      borderRadius: t.radius.lg,
+    },
+    costLine: { color: t.color.text, fontSize: t.font.body, fontWeight: '800' },
+    centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
+    muted: { color: t.color.muted, fontSize: t.font.small },
+    error: { color: t.color.danger, fontSize: t.font.body, fontWeight: '700' },
+    errorLine: { color: t.color.danger, fontSize: t.font.small, marginBottom: t.space.sm },
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: t.color.overlayDark,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: t.space.lg,
+    },
+    modalContent: {
+      backgroundColor: t.color.surface,
+      borderRadius: t.radius.xl,
+      padding: t.space.lg,
+      borderWidth: 1,
+      borderColor: t.color.border,
+      width: '100%',
+      maxWidth: 400,
+      ...t.shadowCard,
+    },
+    modalTitle: { color: t.color.text, fontSize: t.font.h2, fontWeight: '800', marginBottom: t.space.sm },
+    modalSectionTitle: { color: t.color.text, fontSize: t.font.body, fontWeight: '700', marginTop: t.space.md, marginBottom: t.space.xs },
+    modalDivider: { height: 1, backgroundColor: t.color.subtle, marginVertical: t.space.sm },
+    groupRow: { flexDirection: 'row', alignItems: 'center', gap: t.space.sm, marginBottom: t.space.sm },
+    groupRowName: { color: t.color.text, fontSize: t.font.body, fontWeight: '700' },
+    roleRow: { flexDirection: 'row', gap: 8, marginBottom: t.space.md },
+    roleBtn: {
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      borderRadius: t.radius.pill,
+      borderWidth: 1,
+      borderColor: t.color.border,
+      backgroundColor: t.color.inputBg,
+    },
+    roleBtnActive: { backgroundColor: t.color.primarySoft },
+    roleBtnText: { color: t.color.text, fontSize: t.font.small, fontWeight: '700' },
+    friendRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 10,
+      borderBottomWidth: 1,
+      borderBottomColor: t.color.subtle,
+    },
+    friendName: { color: t.color.text, fontSize: t.font.body, fontWeight: '700' },
+    friendAdd: { color: t.color.primary, fontSize: t.font.small, fontWeight: '700' },
+    mapPlaceholder: {
+      paddingVertical: t.space.sm,
+      paddingHorizontal: t.space.sm,
+      backgroundColor: t.color.primarySoft,
+      borderRadius: t.radius.md,
+      borderWidth: 1,
+      borderStyle: 'dashed',
+      borderColor: t.color.mapDashBorder,
+    },
+    mapContainer: { borderRadius: t.radius.lg, overflow: 'hidden', borderWidth: 2, borderColor: t.color.primarySoft },
+  });
+}
