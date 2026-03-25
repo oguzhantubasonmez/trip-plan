@@ -33,7 +33,41 @@ export type PlaceDetails = {
   latitude: number;
   longitude: number;
   formattedAddress?: string;
+  /** Google Places 1–5 ortalama; işletme yoksa genelde gelmez */
+  rating?: number;
+  /** Toplam kullanıcı değerlendirme sayısı */
+  userRatingsTotal?: number;
 };
+
+/** Kısa gösterim: "★ 4,5 (1,2k)" veya null */
+export function formatGooglePlaceRatingLine(
+  rating?: number | null,
+  userRatingsTotal?: number | null
+): string | null {
+  if (rating == null || typeof rating !== 'number' || Number.isNaN(rating) || rating <= 0) return null;
+  const r = Math.min(5, Math.max(0, rating));
+  const rounded = Math.round(r * 10) / 10;
+  const tr = rounded.toLocaleString('tr-TR', {
+    minimumFractionDigits: rounded % 1 === 0 ? 0 : 1,
+    maximumFractionDigits: 1,
+  });
+  let suffix = '';
+  if (
+    userRatingsTotal != null &&
+    typeof userRatingsTotal === 'number' &&
+    userRatingsTotal > 0 &&
+    !Number.isNaN(userRatingsTotal)
+  ) {
+    const n = Math.round(userRatingsTotal);
+    if (n >= 1000) {
+      const k = Math.round(n / 100) / 10;
+      suffix = ` (${k.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}k)`;
+    } else {
+      suffix = ` (${n.toLocaleString('tr-TR')})`;
+    }
+  }
+  return `★ ${tr}${suffix}`;
+}
 
 export type PlacesSearchMode = 'all' | 'regions' | 'geocode';
 
@@ -89,7 +123,7 @@ async function getPlaceDetailsNative(placeId: string): Promise<PlaceDetails> {
     place_id: placeId,
     key,
     language: 'tr',
-    fields: 'name,geometry,formatted_address',
+    fields: 'name,geometry,formatted_address,rating,user_ratings_total',
   });
   const res = await fetch(`${DETAILS_URL}?${params.toString()}`);
   const data = await res.json();
@@ -101,11 +135,18 @@ async function getPlaceDetailsNative(placeId: string): Promise<PlaceDetails> {
   if (loc?.lat == null || loc?.lng == null) {
     throw new Error('Bu yer için konum bilgisi alınamadı.');
   }
+  const rating = typeof r.rating === 'number' && !Number.isNaN(r.rating) ? r.rating : undefined;
+  const userRatingsTotal =
+    typeof r.user_ratings_total === 'number' && !Number.isNaN(r.user_ratings_total)
+      ? Math.round(r.user_ratings_total)
+      : undefined;
   return {
     name: r.name || r.formatted_address || 'Seçilen yer',
     latitude: Number(loc.lat),
     longitude: Number(loc.lng),
     formattedAddress: r.formatted_address,
+    ...(rating != null && rating > 0 ? { rating } : {}),
+    ...(userRatingsTotal != null && userRatingsTotal > 0 ? { userRatingsTotal } : {}),
   };
 }
 
@@ -284,7 +325,7 @@ async function getPlaceDetailsWeb(placeId: string): Promise<PlaceDetails> {
   try {
     const place = new Place({ id: placeId });
     await place.fetchFields({
-      fields: ['displayName', 'formattedAddress', 'location'],
+      fields: ['displayName', 'formattedAddress', 'location', 'rating', 'userRatingCount'],
     });
 
     const loc = place.location;
@@ -297,11 +338,18 @@ async function getPlaceDetailsWeb(placeId: string): Promise<PlaceDetails> {
       throw new Error('Konum koordinatları okunamadı.');
     }
 
+    const rating = typeof place.rating === 'number' && !Number.isNaN(place.rating) ? place.rating : undefined;
+    const urc = place.userRatingCount;
+    const userRatingsTotal =
+      typeof urc === 'number' && !Number.isNaN(urc) ? Math.round(urc) : undefined;
+
     return {
       name: place.displayName || place.formattedAddress || 'Seçilen yer',
       latitude: lat,
       longitude: lng,
       formattedAddress: place.formattedAddress ?? undefined,
+      ...(rating != null && rating > 0 ? { rating } : {}),
+      ...(userRatingsTotal != null && userRatingsTotal > 0 ? { userRatingsTotal } : {}),
     };
   } catch (e: any) {
     const msg = e?.message ?? String(e);

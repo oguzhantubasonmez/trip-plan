@@ -26,6 +26,16 @@ export function normalizeE164(input: string, countryCode = '90'): string | null 
   return `+${digits}`;
 }
 
+/** Profil düzenlemede +90 sonrası gösterilecek rakamlar. */
+export function nationalDigitsAfterTrCountry(e164: string): string {
+  if (!e164?.trim()) return '';
+  const t = e164.trim();
+  if (t.startsWith('+90')) return t.slice(3).replace(/[^\d]/g, '');
+  const digits = t.replace(/[^\d]/g, '');
+  if (digits.startsWith('90') && digits.length >= 12) return digits.slice(2);
+  return digits.replace(/^0/, '');
+}
+
 export function maskPhone(e164: string): string {
   const digits = e164.replace(/[^\d]/g, '');
   if (digits.length < 6) return e164;

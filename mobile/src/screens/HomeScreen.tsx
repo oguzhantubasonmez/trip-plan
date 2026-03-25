@@ -13,11 +13,11 @@ import { AppLogo } from '../components/AppLogo';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
 import { auth } from '../lib/firebase';
-import { getTripsForUser } from '../services/trips';
+import { getTripListMetricsForHome, getTripsForUser, type TripListMetrics } from '../services/trips';
 import type { Trip } from '../types/trip';
 import { useAppTheme } from '../ThemeContext';
 import type { AppTheme } from '../theme';
-import { formatTripScheduleSummary } from '../utils/tripSchedule';
+import { formatDrivingDurationMinutes, formatTripScheduleSummary } from '../utils/tripSchedule';
 
 export function HomeScreen(props: {
   onCreateTrip: () => void;
@@ -28,6 +28,7 @@ export function HomeScreen(props: {
   const theme = useAppTheme();
   const styles = useMemo(() => createHomeStyles(theme), [theme]);
   const [trips, setTrips] = useState<Trip[]>([]);
+  const [tripMetrics, setTripMetrics] = useState<Map<string, TripListMetrics>>(new Map());
   const [loading, setLoading] = useState(true);
   const uid = auth.currentUser?.uid;
 
@@ -36,9 +37,12 @@ export function HomeScreen(props: {
     setLoading(true);
     try {
       const list = await getTripsForUser(uid);
+      const metrics = await getTripListMetricsForHome(list.map((t) => t.tripId));
       setTrips(list);
+      setTripMetrics(metrics);
     } catch (_) {
       setTrips([]);
+      setTripMetrics(new Map());
     } finally {
       setLoading(false);
     }
@@ -120,6 +124,26 @@ export function HomeScreen(props: {
                 sched.timeLine != null &&
                 sched.combinedLine === sched.dateLine &&
                 Boolean(item.startTime?.trim() || item.endTime?.trim());
+              const m = tripMetrics.get(item.tripId);
+              const kmFromLegs = m && m.distanceFromLegsKm > 0 ? m.distanceFromLegsKm : null;
+              const kmStored =
+                item.totalDistance != null && item.totalDistance > 0 ? item.totalDistance : null;
+              const kmDisplay = kmFromLegs != null ? kmFromLegs : kmStored;
+              const kmLabel =
+                kmDisplay != null ? (kmFromLegs != null ? `~${kmDisplay} km` : `${kmDisplay} km`) : null;
+              const fuel = item.totalFuelCost ?? 0;
+              const extra = m?.extraCostsTotal ?? 0;
+              const grandCost = Math.round((fuel + extra) * 100) / 100;
+              const costLabel =
+                grandCost > 0
+                  ? `${grandCost.toLocaleString('tr-TR', {
+                      minimumFractionDigits: 0,
+                      maximumFractionDigits: 2,
+                    })} ₺`
+                  : null;
+              const durationLabel =
+                m && m.drivingDurationMin > 0 ? formatDrivingDurationMinutes(m.drivingDurationMin) : null;
+              const showMetaBlock = Boolean(kmLabel || costLabel || durationLabel);
               return (
                 <Pressable
                   onPress={() => props.onOpenTrip(item.tripId)}
@@ -134,19 +158,33 @@ export function HomeScreen(props: {
                     <Text style={styles.tripTitle} numberOfLines={2}>
                       {item.title}
                     </Text>
-                    <Text style={styles.tripScheduleMain} numberOfLines={3}>
-                      📅 {sched.combinedLine}
-                    </Text>
+                    <Text style={styles.tripScheduleMain}>📅 {sched.combinedLine}</Text>
                     {showExtraTimeLine ? (
                       <Text style={styles.tripTimes}>🕐 {sched.timeLine}</Text>
                     ) : null}
-                    {item.totalDistance != null && item.totalDistance > 0 && (
-                      <View style={styles.kmPill}>
-                        <Text style={styles.kmPillText}>🛣️ {item.totalDistance} km</Text>
+                    {showMetaBlock ? (
+                      <View style={styles.tripMetaRow}>
+                        {kmLabel ? (
+                          <View style={[styles.metaPill, styles.metaPillKm]}>
+                            <Text style={styles.metaPillText}>🛣️ {kmLabel}</Text>
+                          </View>
+                        ) : null}
+                        {costLabel ? (
+                          <View style={[styles.metaPill, styles.metaPillCost]}>
+                            <Text style={styles.metaPillText}>💰 {costLabel}</Text>
+                          </View>
+                        ) : null}
+                        {durationLabel ? (
+                          <View style={[styles.metaPill, styles.metaPillTime]}>
+                            <Text style={styles.metaPillText}>⏱ {durationLabel}</Text>
+                          </View>
+                        ) : null}
                       </View>
-                    )}
+                    ) : null}
                   </View>
-                  <Text style={styles.chevron}>›</Text>
+                  <View style={styles.chevronWrap}>
+                    <Text style={styles.chevron}>›</Text>
+                  </View>
                 </Pressable>
               );
             }}
@@ -239,30 +277,61 @@ function createHomeStyles(theme: AppTheme) {
     },
     tripPressed: { opacity: 0.95 },
     tripStripe: { width: 6, alignSelf: 'stretch', minHeight: 88 },
-    tripBody: { flex: 1, paddingVertical: theme.space.md, paddingHorizontal: theme.space.md },
+    tripBody: {
+      flex: 1,
+      minWidth: 0,
+      flexShrink: 1,
+      paddingVertical: theme.space.md,
+      paddingHorizontal: theme.space.md,
+    },
     tripTitle: { color: theme.color.text, fontSize: theme.font.h2, fontWeight: '800' },
     tripScheduleMain: {
       color: theme.color.text,
       fontSize: theme.font.body,
       marginTop: 8,
       fontWeight: '800',
-      lineHeight: 22,
+      lineHeight: 24,
     },
     tripTimes: { color: theme.color.textSecondary, fontSize: theme.font.small, marginTop: 6, fontWeight: '700' },
-    kmPill: {
-      alignSelf: 'flex-start',
+    tripMetaRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
       marginTop: 10,
-      backgroundColor: theme.color.primarySoft,
-      paddingHorizontal: 12,
-      paddingVertical: 6,
-      borderRadius: theme.radius.pill,
     },
-    kmPillText: { color: theme.color.primaryDark, fontSize: theme.font.tiny, fontWeight: '800' },
+    metaPill: {
+      paddingVertical: 6,
+      paddingHorizontal: 10,
+      borderRadius: theme.radius.pill,
+      borderWidth: 1,
+      maxWidth: '100%',
+    },
+    metaPillText: {
+      color: theme.color.text,
+      fontSize: theme.font.tiny,
+      fontWeight: '700',
+    },
+    metaPillKm: {
+      backgroundColor: theme.color.primarySoft,
+      borderColor: theme.color.cardBorderPrimary,
+    },
+    metaPillCost: {
+      backgroundColor: theme.color.accentSoft,
+      borderColor: theme.color.cardBorderAccent,
+    },
+    metaPillTime: {
+      backgroundColor: theme.color.inputBg,
+      borderColor: theme.color.border,
+    },
+    chevronWrap: {
+      justifyContent: 'center',
+      paddingRight: theme.space.md,
+      paddingLeft: 4,
+    },
     chevron: {
       fontSize: 28,
       color: theme.color.primary,
       fontWeight: '300',
-      paddingRight: theme.space.md,
     },
     signOutWrap: { marginTop: theme.space.xl, alignItems: 'center', paddingVertical: theme.space.md },
     signOutText: { color: theme.color.muted, fontSize: theme.font.small, fontWeight: '700' },

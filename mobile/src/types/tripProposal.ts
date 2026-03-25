@@ -4,6 +4,8 @@ import type { StopExtraExpense } from './trip';
 
 export type EditStopPayload = {
   locationName?: string;
+  /** YYYY-MM-DD */
+  stopDate?: string | null;
   arrivalTime?: string;
   departureTime?: string;
   cost?: number;
@@ -12,6 +14,8 @@ export type EditStopPayload = {
   /** Durak ekstra masrafları (tam liste; onayda doğrudan yazılır) */
   extraExpenses?: StopExtraExpense[];
   coords?: { latitude: number; longitude: number };
+  placeRating?: number | null;
+  placeUserRatingsTotal?: number | null;
 };
 
 export type TripProposal = {

@@ -51,6 +51,12 @@ export type Stop = {
   stopId: string;
   tripId: string;
   locationName: string;
+  /** Bu durağın plan günü (YYYY-MM-DD); yoksa rota başlangıç tarihi varsayılır */
+  stopDate?: string;
+  /** Google Places ortalama puanı (1–5), kayıt anında; yoksa işletme / veri yok */
+  placeRating?: number;
+  /** Google’daki değerlendirme sayısı */
+  placeUserRatingsTotal?: number;
   coords?: { latitude: number; longitude: number };
   arrivalTime?: string;
   departureTime?: string;

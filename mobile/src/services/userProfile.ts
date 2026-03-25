@@ -20,6 +20,8 @@ function parseExpenseTypes(v: any): ExpenseType[] {
 export type UserProfile = {
   uid: string;
   phoneNumber: string;
+  /** Kayıt e-postası (Auth ile aynı; profil senkronu) */
+  email?: string;
   displayName?: string;
   avatar?: string;
   carConsumption?: string;
@@ -35,7 +37,8 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
   const v = snap.data() as any;
   return {
     uid: snap.id,
-    phoneNumber: v.phoneNumber,
+    phoneNumber: v.phoneNumber ?? '',
+    email: v.email,
     displayName: v.displayName,
     avatar: v.avatar,
     carConsumption: v.carConsumption,
@@ -44,16 +47,24 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
   };
 }
 
-export async function ensureUserDoc(params: { uid: string; phoneNumber: string }) {
+export async function ensureUserDoc(params: {
+  uid: string;
+  phoneNumber: string;
+  displayName?: string;
+  email?: string;
+}) {
   const ref = doc(db, 'users', params.uid);
   const snap = await getDoc(ref);
+  const name = params.displayName?.trim() ?? '';
+  const emailNorm = params.email?.trim().toLowerCase() ?? '';
   if (!snap.exists()) {
     await setDoc(
       ref,
       {
         uid: params.uid,
         phoneNumber: params.phoneNumber,
-        displayName: '',
+        email: emailNorm,
+        displayName: name,
         avatar: '',
         friends: [],
         expenseTypes: [],
@@ -63,8 +74,40 @@ export async function ensureUserDoc(params: { uid: string; phoneNumber: string }
       { merge: true },
     );
   } else {
-    await updateDoc(ref, { updatedAt: serverTimestamp() });
+    const updates: Record<string, unknown> = {
+      phoneNumber: params.phoneNumber,
+      updatedAt: serverTimestamp(),
+    };
+    if (name) updates.displayName = name;
+    if (emailNorm) updates.email = emailNorm;
+    await updateDoc(ref, updates);
   }
+}
+
+/** Giriş sonrası: belge yoksa minimal oluşturur; varsa e-postayı günceller. */
+export async function ensureUserDocAfterSignIn(params: { uid: string; email: string }): Promise<void> {
+  const ref = doc(db, 'users', params.uid);
+  const snap = await getDoc(ref);
+  const emailNorm = params.email.trim().toLowerCase();
+  if (!snap.exists()) {
+    await setDoc(
+      ref,
+      {
+        uid: params.uid,
+        email: emailNorm,
+        phoneNumber: '',
+        displayName: '',
+        avatar: '',
+        friends: [],
+        expenseTypes: [],
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    );
+    return;
+  }
+  await updateDoc(ref, { email: emailNorm, updatedAt: serverTimestamp() });
 }
 
 export async function updateUserProfile(
@@ -73,6 +116,8 @@ export async function updateUserProfile(
     displayName?: string;
     carConsumption?: string;
     expenseTypes?: ExpenseType[];
+    /** E.164; rehber eşleştirmesi için */
+    phoneNumber?: string;
   }
 ): Promise<void> {
   const ref = doc(db, 'users', uid);
@@ -80,6 +125,7 @@ export async function updateUserProfile(
   if (data.displayName !== undefined) updates.displayName = data.displayName;
   if (data.carConsumption !== undefined) updates.carConsumption = data.carConsumption;
   if (data.expenseTypes !== undefined) updates.expenseTypes = data.expenseTypes;
+  if (data.phoneNumber !== undefined) updates.phoneNumber = data.phoneNumber;
   await updateDoc(ref, updates);
 }
 

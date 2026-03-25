@@ -13,6 +13,7 @@ import { maskPhone } from '../utils/phone';
 export function OtpVerifyScreen(props: {
   phoneE164: string;
   verificationId: string;
+  displayName: string;
   onVerified: () => void;
 }) {
   const appTheme = useAppTheme();
@@ -36,7 +37,11 @@ export function OtpVerifyScreen(props: {
       const userCred = await signInWithCredential(auth, cred);
       const uid = userCred.user.uid;
       const phoneNumber = userCred.user.phoneNumber || props.phoneE164;
-      await ensureUserDoc({ uid, phoneNumber });
+      await ensureUserDoc({
+        uid,
+        phoneNumber,
+        displayName: props.displayName.trim() || undefined,
+      });
       props.onVerified();
     } catch (e: any) {
       setError(e?.message || 'Kod doğrulanamadı. Tekrar dene.');

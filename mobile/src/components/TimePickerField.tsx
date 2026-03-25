@@ -10,7 +10,12 @@ import {
 } from 'react-native';
 import { useAppTheme } from '../ThemeContext';
 import type { AppTheme } from '../theme';
-import { dateToPlanTime, normalizePlanTime, planTimeToDate } from '../utils/planTime';
+import {
+  dateToPlanTimeFromPickerEvent,
+  normalizePlanTime,
+  planTimeToDate,
+} from '../utils/planTime';
+import type { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 
 type Props = {
   label: string;
@@ -21,6 +26,10 @@ type Props = {
   errorText?: string;
   /** Boş değere dönmeye izin ver (opsiyonel plan saatleri için) */
   allowClear?: boolean;
+  /** Üst etiket satırını gösterme (durak kartı — erişilebilirlik için label kullanılır) */
+  hideLabel?: boolean;
+  /** Boşken "Saat seç" yerine yalnızca saat simgesi */
+  iconOnlyPlaceholder?: boolean;
 };
 
 const isWeb = Platform.OS === 'web';
@@ -31,6 +40,7 @@ export function TimePickerField(props: Props) {
   const [androidOpen, setAndroidOpen] = useState(false);
   const [iosOpen, setIosOpen] = useState(false);
   const [iosTemp, setIosTemp] = useState(() => planTimeToDate(props.value));
+  const [iosLastEvt, setIosLastEvt] = useState<DateTimePickerEvent | null>(null);
 
   useEffect(() => {
     if (!iosOpen) setIosTemp(planTimeToDate(props.value));
@@ -46,21 +56,34 @@ export function TimePickerField(props: Props) {
   function openPicker() {
     if (isWeb) return;
     setIosTemp(planTimeToDate(props.value));
-    if (Platform.OS === 'ios') setIosOpen(true);
-    else setAndroidOpen(true);
+    if (Platform.OS === 'ios') {
+      setIosLastEvt(null);
+      setIosOpen(true);
+    } else setAndroidOpen(true);
   }
+
+  const showLabelRow = !props.hideLabel;
 
   if (isWeb) {
     return (
       <View style={styles.wrap}>
-        <View style={styles.labelRow}>
-          <Text style={styles.label}>{props.label}</Text>
-          {showClear ? (
+        {showLabelRow ? (
+          <View style={styles.labelRow}>
+            <Text style={styles.label}>{props.label}</Text>
+            {showClear ? (
+              <Pressable onPress={() => props.onChange('')} hitSlop={8}>
+                <Text style={styles.clearText}>Temizle</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : showClear ? (
+          <View style={styles.labelRow}>
+            <View style={{ flex: 1 }} />
             <Pressable onPress={() => props.onChange('')} hitSlop={8}>
               <Text style={styles.clearText}>Temizle</Text>
             </Pressable>
-          ) : null}
-        </View>
+          </View>
+        ) : null}
         <View
           style={[
             styles.input,
@@ -102,29 +125,51 @@ export function TimePickerField(props: Props) {
     );
   }
 
+  const compact = Boolean(props.iconOnlyPlaceholder);
+  const emptyIconOnly = compact && !display;
+
   return (
     <View style={styles.wrap}>
-      <View style={styles.labelRow}>
-        <Text style={styles.label}>{props.label}</Text>
-        {showClear ? (
+      {showLabelRow ? (
+        <View style={styles.labelRow}>
+          <Text style={styles.label}>{props.label}</Text>
+          {showClear ? (
+            <Pressable onPress={() => props.onChange('')} hitSlop={8}>
+              <Text style={styles.clearText}>Temizle</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : showClear ? (
+        <View style={styles.labelRow}>
+          <View style={{ flex: 1 }} />
           <Pressable onPress={() => props.onChange('')} hitSlop={8}>
             <Text style={styles.clearText}>Temizle</Text>
           </Pressable>
-        ) : null}
-      </View>
+        </View>
+      ) : null}
       <Pressable
         onPress={openPicker}
+        accessibilityRole="button"
+        accessibilityLabel={display ? `${props.label}: ${display}` : props.label}
         style={({ pressed }) => [
           styles.input,
+          compact ? styles.inputCompact : null,
           theme.shadowSoft,
           pressed ? { opacity: 0.95 } : null,
           props.errorText ? styles.inputError : null,
+          emptyIconOnly ? styles.inputIconOnly : null,
         ]}
       >
-        <Text style={[styles.value, !display ? styles.placeholder : null]}>
-          {display || 'Saat seç'}
-        </Text>
-        <Text style={styles.chevron}>🕐</Text>
+        {emptyIconOnly ? (
+          <Text style={styles.clockIconOnly}>🕐</Text>
+        ) : (
+          <>
+            <Text style={[styles.value, !display ? styles.placeholder : null]}>
+              {display || 'Saat seç'}
+            </Text>
+            <Text style={styles.chevron}>🕐</Text>
+          </>
+        )}
       </Pressable>
 
       {Platform.OS === 'android' && androidOpen ? (
@@ -136,7 +181,7 @@ export function TimePickerField(props: Props) {
           onChange={(ev, date) => {
             setAndroidOpen(false);
             if (ev.type === 'dismissed') return;
-            if (date) props.onChange(dateToPlanTime(date));
+            if (date) props.onChange(dateToPlanTimeFromPickerEvent(ev, date));
           }}
         />
       ) : null}
@@ -145,14 +190,17 @@ export function TimePickerField(props: Props) {
         <Modal visible={iosOpen} transparent animationType="fade">
           <Pressable style={styles.modalBackdrop} onPress={() => setIosOpen(false)}>
             <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-              <Text style={styles.modalTitle}>Saat seç</Text>
+              {props.iconOnlyPlaceholder ? null : <Text style={styles.modalTitle}>Saat seç</Text>}
               <DateTimePicker
                 value={iosTemp}
                 mode="time"
                 is24Hour
                 display="spinner"
-                onChange={(_, date) => {
-                  if (date) setIosTemp(date);
+                onChange={(ev, date) => {
+                  if (date) {
+                    setIosTemp(date);
+                    setIosLastEvt(ev);
+                  }
                 }}
                 style={styles.iosPicker}
               />
@@ -165,7 +213,9 @@ export function TimePickerField(props: Props) {
                 </Pressable>
                 <Pressable
                   onPress={() => {
-                    props.onChange(dateToPlanTime(iosTemp));
+                    props.onChange(
+                      dateToPlanTimeFromPickerEvent(iosLastEvt ?? { nativeEvent: {} }, iosTemp)
+                    );
                     setIosOpen(false);
                   }}
                   style={[styles.modalBtn, styles.modalBtnPrimary]}
@@ -217,6 +267,15 @@ function createStyles(theme: AppTheme) {
       alignItems: 'center',
       justifyContent: 'space-between',
     },
+    inputCompact: {
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+    },
+    inputIconOnly: {
+      justifyContent: 'center',
+      minHeight: 44,
+    },
+    clockIconOnly: { fontSize: 22, textAlign: 'center' },
     inputError: { borderColor: theme.color.danger, borderWidth: 2 },
     value: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '700', flex: 1 },
     placeholder: { color: theme.color.muted, fontWeight: '600' },
@@ -252,8 +311,8 @@ function createStyles(theme: AppTheme) {
       justifyContent: 'flex-end',
     },
     modalBtn: {
-      paddingVertical: 12,
-      paddingHorizontal: 20,
+      paddingVertical: 10,
+      paddingHorizontal: 16,
       borderRadius: theme.radius.pill,
     },
     modalBtnGhost: { backgroundColor: theme.color.inputBg },

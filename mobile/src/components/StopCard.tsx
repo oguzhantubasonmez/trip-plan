@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { format } from 'date-fns';
+import { useEffect, useMemo, useState } from 'react';
 import { useAppTheme } from '../ThemeContext';
 import type { AppTheme } from '../theme';
 import { Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { DatePickerField } from './DatePickerField';
 import { PrimaryButton } from './PrimaryButton';
 import { TextField } from './TextField';
 import { TimePickerField } from './TimePickerField';
-import { addComment, getCommentsForStop } from '../services/comments';
+import { formatGooglePlaceRatingLine } from '../services/places';
 import { updateStopTimes } from '../services/trips';
-import type { Comment } from '../types/comment';
 import type { Stop, StopExtraExpense } from '../types/trip';
 import type { EditStopPayload } from '../types/tripProposal';
 import type { ExpenseType, UserProfile } from '../services/userProfile';
@@ -18,6 +19,8 @@ import {
   normalizeStopExtraExpenses,
   stopExtraTotal,
 } from '../utils/stopExpenses';
+import { stayMinutesBetweenTimes } from '../utils/planTime';
+import { formatDrivingDurationMinutes, parseTripYmd } from '../utils/tripSchedule';
 
 type ExpenseDraftRow = {
   expenseId: string;
@@ -58,7 +61,7 @@ type Props = {
   /** Giriş yapan kullanıcının profil masraf türleri (durakta seçim için) */
   expenseTypes: ExpenseType[];
   isAdmin: boolean;
-  /** Editör: değişiklikler öneri olarak gider; izleyici: sadece yorum */
+  /** Editör: değişiklikler öneri olarak gider; izleyici: salt okunur */
   canProposeChanges: boolean;
   currentUid: string | undefined;
   userProfiles: Map<string, UserProfile>;
@@ -70,44 +73,44 @@ type Props = {
   onRelocateWithSearch?: () => void;
   /** Liste sırası (0 = başlangıç); özet satırında önceki duraktan mesafe/süre */
   stopIndex: number;
+  /** Rota plan günü seçimi (YYYY-MM-DD aralığı) */
+  tripStartDate?: string;
+  tripEndDate?: string;
   /** Uzun basınca silme onayı (genelde rota admini) */
   onLongPressDelete?: () => void;
+  /** Masraf türü yokken kullanıcıyı Profil → Masraf türleri’ne göndermek için */
+  onOpenProfileForExpenseTypes?: () => void;
 };
 
-/** Kapalı kart: tek–iki satır, yükseklik dostu özet */
-function compactPeekSubtitle(stop: Stop, stopIndex: number): string {
-  const parts: string[] = [];
+/** Kapalı kart özeti: her bilgi ayrı satır; metin yatayda serbest kırılır */
+function buildPeekSummaryLines(stop: Stop, stopIndex: number): string[] {
+  const lines: string[] = [];
   const leg = stop.legFromPrevious;
   if (stopIndex > 0 && leg?.distanceKm != null) {
     const basisHint = leg.distanceBasis === 'straight_line' ? ' (kuş uçuşu)' : '';
-    parts.push(
-      `↧ ~${leg.distanceKm} km${basisHint}${leg.durationMin != null ? ` · ~${leg.durationMin} dk` : ''}`
-    );
+    lines.push(`↧ Önceki duraktan tahmini mesafe: ~${leg.distanceKm} km${basisHint}`);
+    if (leg.durationMin != null) {
+      lines.push(
+        `⏱ Önceki duraktan tahmini yol süresi: ~${leg.durationMin} dk`
+      );
+    }
   } else if (stopIndex > 0 && leg?.durationMin != null) {
-    parts.push(`↧ ~${leg.durationMin} dk`);
+    lines.push(`⏱ Önceki duraktan tahmini yol süresi: ~${leg.durationMin} dk`);
   }
+  const ratingLine = formatGooglePlaceRatingLine(stop.placeRating, stop.placeUserRatingsTotal);
+  if (ratingLine) lines.push(ratingLine);
   if (stop.arrivalTime || stop.departureTime) {
-    parts.push(`🕐 ${stop.arrivalTime || '–'}–${stop.departureTime || '–'}`);
+    lines.push(`🕐 ${stop.arrivalTime || '–'} – ${stop.departureTime || '–'}`);
+  }
+  const stayMin = stayMinutesBetweenTimes(stop.arrivalTime, stop.departureTime);
+  if (stayMin != null && stayMin > 0) {
+    const dur = formatDrivingDurationMinutes(stayMin);
+    if (dur) lines.push(`📍 Durakta kalış: ${dur}`);
   }
   const extraTotal = stopExtraTotal(stop);
-  if (extraTotal > 0) parts.push(`💰 ${extraTotal} TL`);
-  if (stop.status === 'pending') parts.push('Onay bekliyor');
-  if (parts.length > 0) return parts.join(' · ');
-  return 'Dokunarak ayrıntı';
-}
-
-function formatCommentTime(t: any) {
-  if (!t?.toMillis) return '';
-  try {
-    return new Date(t.toMillis()).toLocaleString('tr-TR', {
-      day: 'numeric',
-      month: 'short',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  } catch {
-    return '';
-  }
+  if (extraTotal > 0) lines.push(`💰 ${extraTotal} TL`);
+  if (stop.status === 'pending') lines.push('Onay bekliyor');
+  return lines;
 }
 
 function parseTimeToMinutes(t: string): number | null {
@@ -122,12 +125,8 @@ function parseTimeToMinutes(t: string): number | null {
 export function StopCard(props: Props) {
   const appTheme = useAppTheme();
   const styles = useMemo(() => createStopCardStyles(appTheme), [appTheme]);
+  const expenseTypesList = Array.isArray(props.expenseTypes) ? props.expenseTypes : [];
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const [comments, setComments] = useState<Comment[]>([]);
-  const [commentsLoaded, setCommentsLoaded] = useState(false);
-  const [newComment, setNewComment] = useState('');
-  const [postingComment, setPostingComment] = useState(false);
   const [locationName, setLocationName] = useState(props.stop.locationName);
   const [arrivalTime, setArrivalTime] = useState(props.stop.arrivalTime ?? '');
   const [departureTime, setDepartureTime] = useState(props.stop.departureTime ?? '');
@@ -148,12 +147,26 @@ export function StopCard(props: Props) {
   const [savingTime, setSavingTime] = useState(false);
   const [savingCost, setSavingCost] = useState(false);
   const [proposing, setProposing] = useState(false);
+  const [planDay, setPlanDay] = useState<Date | null>(() => {
+    const fromStop = parseTripYmd(props.stop.stopDate);
+    if (fromStop) return fromStop;
+    return parseTripYmd(props.tripStartDate);
+  });
 
   useEffect(() => {
     setLocationName(props.stop.locationName);
     setArrivalTime(props.stop.arrivalTime ?? '');
     setDepartureTime(props.stop.departureTime ?? '');
   }, [props.stop.locationName, props.stop.arrivalTime, props.stop.departureTime]);
+
+  useEffect(() => {
+    const fromStop = parseTripYmd(props.stop.stopDate);
+    if (fromStop) {
+      setPlanDay(fromStop);
+      return;
+    }
+    setPlanDay(parseTripYmd(props.tripStartDate));
+  }, [props.stop.stopDate, props.tripStartDate]);
 
   useEffect(() => {
     const norm = normalizeStopExtraExpenses(props.stop);
@@ -177,32 +190,6 @@ export function StopCard(props: Props) {
     return diff;
   }, [arrivalTime, departureTime]);
 
-  const loadComments = useCallback(async () => {
-    const list = await getCommentsForStop(props.stop.stopId);
-    setComments(list);
-    setCommentsLoaded(true);
-  }, [props.stop.stopId]);
-
-  const toggleExpand = useCallback(() => {
-    const next = !expanded;
-    setExpanded(next);
-    if (next && !commentsLoaded) loadComments();
-  }, [expanded, commentsLoaded, loadComments]);
-
-  async function handleAddComment() {
-    const msg = newComment.trim();
-    if (!msg || !props.currentUid) return;
-    setPostingComment(true);
-    try {
-      await addComment({ stopId: props.stop.stopId, userId: props.currentUid, message: msg });
-      setNewComment('');
-      await loadComments();
-      props.onRefresh();
-    } finally {
-      setPostingComment(false);
-    }
-  }
-
   async function handleSaveTimes() {
     if (props.canProposeChanges && props.onProposeChange && !props.isAdmin) {
       setProposing(true);
@@ -224,6 +211,30 @@ export function StopCard(props: Props) {
         arrivalTime: arrivalTime.trim() || undefined,
         departureTime: departureTime.trim() || undefined,
       });
+      props.onRefresh();
+    } finally {
+      setSavingTime(false);
+    }
+  }
+
+  async function handleSavePlanDay() {
+    if (!planDay) return;
+    const ymd = format(planDay, 'yyyy-MM-dd');
+    if (props.canProposeChanges && props.onProposeChange && !props.isAdmin) {
+      setProposing(true);
+      try {
+        await props.onProposeChange(props.stop.stopId, { stopDate: ymd });
+        props.onRefresh();
+      } finally {
+        setProposing(false);
+      }
+      return;
+    }
+    if (!props.isAdmin) return;
+    setSavingTime(true);
+    try {
+      const { updateStopFromPayload } = await import('../services/trips');
+      await updateStopFromPayload(props.stop.stopId, { stopDate: ymd });
       props.onRefresh();
     } finally {
       setSavingTime(false);
@@ -272,7 +283,7 @@ export function StopCard(props: Props) {
   }
 
   async function handleSaveAllExpenses() {
-    const built = buildStopExpensesFromDraftRows(expenseRows, props.stop, props.expenseTypes);
+    const built = buildStopExpensesFromDraftRows(expenseRows, props.stop, expenseTypesList);
     if (props.canProposeChanges && props.onProposeChange && !props.isAdmin) {
       setProposing(true);
       try {
@@ -321,8 +332,8 @@ export function StopCard(props: Props) {
 
   const showEditFields = props.isAdmin || props.canProposeChanges;
   const leg = props.stop.legFromPrevious;
-  const peekSubtitle = useMemo(
-    () => compactPeekSubtitle(props.stop, props.stopIndex),
+  const peekLines = useMemo(
+    () => buildPeekSummaryLines(props.stop, props.stopIndex),
     [
       props.stopIndex,
       props.stop.status,
@@ -333,8 +344,22 @@ export function StopCard(props: Props) {
       props.stop.legFromPrevious?.distanceKm,
       props.stop.legFromPrevious?.durationMin,
       props.stop.legFromPrevious?.distanceBasis,
+      props.stop.placeRating,
+      props.stop.placeUserRatingsTotal,
     ]
   );
+
+  const placeRatingLine = formatGooglePlaceRatingLine(
+    props.stop.placeRating,
+    props.stop.placeUserRatingsTotal
+  );
+
+  const planDayRange = useMemo(() => {
+    const a = parseTripYmd(props.tripStartDate);
+    const b = parseTripYmd(props.tripEndDate ?? props.tripStartDate);
+    if (!a || !b) return { min: undefined as Date | undefined, max: undefined as Date | undefined };
+    return a.getTime() <= b.getTime() ? { min: a, max: b } : { min: b, max: a };
+  }, [props.tripStartDate, props.tripEndDate]);
 
   const detailMaxHeight = useMemo(
     () => Math.min(420, Math.round(Dimensions.get('window').height * 0.52)),
@@ -350,6 +375,10 @@ export function StopCard(props: Props) {
     [normalizedExtras]
   );
 
+  const headerAccessibilityHint = props.onLongPressDelete
+    ? 'Ayrıntı için dokun; silmek için uzun bas'
+    : 'Ayrıntıları aç veya kapat';
+
   return (
     <View style={[styles.card, !detailsOpen ? styles.cardCollapsed : styles.cardOpen]}>
       <View style={styles.cardTopRow}>
@@ -357,45 +386,89 @@ export function StopCard(props: Props) {
           onPress={() => setDetailsOpen((o) => !o)}
           onLongPress={props.onLongPressDelete}
           delayLongPress={480}
-          style={({ pressed }) => [styles.headerTap, pressed && { opacity: 0.92 }]}
+          style={({ pressed }) => [
+            styles.headerTap,
+            pressed && { opacity: 0.92 },
+          ]}
           accessibilityRole="button"
           accessibilityState={{ expanded: detailsOpen }}
-          accessibilityHint={
-            props.onLongPressDelete
-              ? 'Ayrıntı için dokun; silmek için uzun bas'
-              : 'Ayrıntıları aç veya kapat'
-          }
+          accessibilityHint={headerAccessibilityHint}
         >
-          <View style={styles.stopIndexBadge}>
-            <Text style={styles.stopIndexBadgeText}>{props.stopIndex + 1}</Text>
-          </View>
-          <View style={styles.headerTextCol}>
-            <Text style={detailsOpen ? styles.stopName : styles.stopNameCollapsed} numberOfLines={detailsOpen ? 3 : 1}>
-              {props.stop.locationName}
-            </Text>
-            {!detailsOpen ? (
-              <Text style={styles.peekSubtitle} numberOfLines={2}>
-                {peekSubtitle}
-              </Text>
-            ) : null}
-          </View>
-          <Text style={styles.rowChevron}>{detailsOpen ? '▲' : '▼'}</Text>
+          {!detailsOpen ? (
+            <View style={styles.collapsedTitleRow}>
+              <View style={styles.stopIndexBadge}>
+                <Text style={styles.stopIndexBadgeText}>{props.stopIndex + 1}</Text>
+              </View>
+              <View style={styles.headerTitleOnlyCol}>
+                <Text style={styles.stopNameCollapsed} numberOfLines={1}>
+                  {props.stop.locationName}
+                </Text>
+              </View>
+            </View>
+          ) : (
+            <>
+              <View style={styles.stopIndexBadge}>
+                <Text style={styles.stopIndexBadgeText}>{props.stopIndex + 1}</Text>
+              </View>
+              <View style={styles.headerTextCol}>
+                <Text style={styles.stopName} numberOfLines={3}>
+                  {props.stop.locationName}
+                </Text>
+              </View>
+            </>
+          )}
         </Pressable>
-        {props.isAdmin ? (
+        <View style={styles.headerRightActions}>
           <Pressable
-            onPress={props.onToggleStatus}
-            style={[
-              styles.statusBtn,
-              styles.statusBtnCompact,
-              props.stop.status === 'approved' ? styles.statusApproved : null,
-            ]}
+            onPress={() => setDetailsOpen((o) => !o)}
+            style={({ pressed }) => [styles.chevronBtn, pressed && { opacity: 0.85 }]}
+            accessibilityRole="button"
+            accessibilityLabel={detailsOpen ? 'Daralt' : 'Genişlet'}
+            accessibilityState={{ expanded: detailsOpen }}
+            hitSlop={12}
           >
-            <Text style={styles.statusBtnTextCompact}>
-              {props.stop.status === 'approved' ? 'Onaylı' : 'Onayla'}
-            </Text>
+            <Text style={styles.rowChevron}>{detailsOpen ? '▲' : '▼'}</Text>
           </Pressable>
-        ) : null}
+          {props.isAdmin ? (
+            <Pressable
+              onPress={props.onToggleStatus}
+              style={[
+                styles.statusBtn,
+                styles.statusBtnCompact,
+                props.stop.status === 'approved' ? styles.statusApproved : null,
+              ]}
+            >
+              <Text style={styles.statusBtnTextCompact}>
+                {props.stop.status === 'approved' ? 'Onaylı' : 'Onayla'}
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
       </View>
+
+      {!detailsOpen ? (
+        <Pressable
+          onPress={() => setDetailsOpen(true)}
+          onLongPress={props.onLongPressDelete}
+          delayLongPress={480}
+          style={({ pressed }) => [styles.peekFullWidthTap, pressed && { opacity: 0.92 }]}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: false }}
+          accessibilityHint={headerAccessibilityHint}
+        >
+          <View style={styles.peekSummary}>
+            {peekLines.length > 0 ? (
+              peekLines.map((line, i) => (
+                <Text key={i} style={styles.peekLine}>
+                  {line}
+                </Text>
+              ))
+            ) : (
+              <Text style={styles.peekLine}>Dokunarak ayrıntı</Text>
+            )}
+          </View>
+        </Pressable>
+      ) : null}
 
       {detailsOpen ? (
         <ScrollView
@@ -407,6 +480,7 @@ export function StopCard(props: Props) {
         >
           <Text style={styles.stopMeta}>
             {props.stop.status === 'pending' ? 'Onay bekliyor' : 'Onaylandı'}
+            {placeRatingLine ? <> · {placeRatingLine}</> : null}
             {(props.stop.arrivalTime || props.stop.departureTime) && (
               <> · {props.stop.arrivalTime || '–'} – {props.stop.departureTime || '–'}</>
             )}
@@ -416,15 +490,21 @@ export function StopCard(props: Props) {
           </Text>
           {props.stopIndex > 0 && leg?.distanceKm != null && (
             <Text style={styles.legLine}>
-              Önceki duraktan: ~{leg.distanceKm} km
+              Önceki duraktan tahmini mesafe: ~{leg.distanceKm} km
               {leg.distanceBasis === 'straight_line' ? ' (kuş uçuşu tahmini, yol değil)' : ''}
-              {leg.durationMin != null ? ` · ~${leg.durationMin} dk` : ''}
+            </Text>
+          )}
+          {props.stopIndex > 0 && leg?.distanceKm != null && leg?.durationMin != null && (
+            <Text style={styles.legLine}>
+              Önceki duraktan tahmini yol süresi: ~{leg.durationMin} dk
             </Text>
           )}
           {props.stopIndex > 0 &&
             (leg?.distanceKm === undefined || leg?.distanceKm === null) &&
             leg?.durationMin != null && (
-            <Text style={styles.legLine}>Önceki duraktan: ~{leg.durationMin} dk (tahmini)</Text>
+            <Text style={styles.legLine}>
+              Önceki duraktan tahmini yol süresi: ~{leg.durationMin} dk (mesafe verisi yok)
+            </Text>
           )}
           {stayMinutes != null && (
             <Text style={styles.stayLine}>Bu durakta kalış: ~{stayMinutes} dk</Text>
@@ -453,9 +533,6 @@ export function StopCard(props: Props) {
                   <Text style={styles.savedCostTotalValue}>{extraTotalDisplay} TL</Text>
                 </View>
               ) : null}
-              <Text style={styles.savedCostHint}>
-                Aşağıdan satır ekleyip düzenleyebilir, kaydedebilir veya tümünü silebilirsin.
-              </Text>
             </View>
           ) : null}
           <TextField
@@ -471,6 +548,23 @@ export function StopCard(props: Props) {
             </Pressable>
           )}
 
+          {props.tripStartDate && (props.tripEndDate || props.tripStartDate) ? (
+            <>
+              <DatePickerField
+                label="Plan günü"
+                value={planDay}
+                onChange={setPlanDay}
+                minDate={planDayRange.min}
+                maxDate={planDayRange.max}
+              />
+              <Pressable onPress={handleSavePlanDay} style={styles.smallBtn} disabled={proposing || !planDay}>
+                <Text style={styles.smallBtnText}>
+                  {props.isAdmin ? 'Günü kaydet' : 'Gün önerisi gönder'}
+                </Text>
+              </Pressable>
+            </>
+          ) : null}
+
           <View style={styles.timeRow}>
             <View style={styles.timeCol}>
               <TimePickerField
@@ -478,6 +572,8 @@ export function StopCard(props: Props) {
                 value={arrivalTime}
                 onChange={setArrivalTime}
                 allowClear
+                hideLabel
+                iconOnlyPlaceholder
               />
             </View>
             <View style={styles.timeCol}>
@@ -486,6 +582,8 @@ export function StopCard(props: Props) {
                 value={departureTime}
                 onChange={setDepartureTime}
                 allowClear
+                hideLabel
+                iconOnlyPlaceholder
               />
             </View>
           </View>
@@ -497,20 +595,27 @@ export function StopCard(props: Props) {
           {savingTime && <Text style={styles.muted}>Kaydediliyor...</Text>}
 
           <Text style={styles.typeLabel}>Ekstra masraflar</Text>
-          <Text style={styles.muted}>
-            Her satırda tutar ve isteğe bağlı tür seç. Birden fazla masraf ekleyebilirsin; kayıtta hepsi
-            saklanır.
-          </Text>
-          {props.expenseTypes.length === 0 ? (
-            <Text style={[styles.muted, { marginTop: appTheme.space.xs }]}>
-              Profil sayfasından masraf türü ekleyebilirsin; şimdilik tür seçmeden tutar kaydedebilirsin.
-            </Text>
-          ) : null}
 
-          {expenseRows.length === 0 ? (
-            <Text style={[styles.muted, { marginTop: appTheme.space.sm }]}>
-              Henüz satır yok. «Masraf satırı ekle» ile başla.
-            </Text>
+          {showEditFields && expenseTypesList.length === 0 ? (
+            <View style={styles.expenseTypesEmptyBox}>
+              <Text style={styles.expenseTypesEmptyText}>
+                Profilinde henüz masraf türü tanımlı değil. Tutarı yine de girebilirsin (tür isteğe bağlı).
+                Tür seçenekleri için önce profilinden en az bir masraf çeşidi ekle.
+              </Text>
+              {props.onOpenProfileForExpenseTypes ? (
+                <Pressable
+                  onPress={props.onOpenProfileForExpenseTypes}
+                  style={({ pressed }) => [
+                    styles.expenseTypesProfileBtn,
+                    pressed ? { opacity: 0.88 } : null,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Profil ekranına git, masraf türü ekle"
+                >
+                  <Text style={styles.expenseTypesProfileBtnText}>Profil → Masraf türleri ›</Text>
+                </Pressable>
+              ) : null}
+            </View>
           ) : null}
 
           {expenseRows.map((row, idx) => (
@@ -528,18 +633,18 @@ export function StopCard(props: Props) {
                   accessibilityRole="button"
                   accessibilityLabel="Bu masraf satırını sil"
                 >
-                  <Text style={styles.rowRemoveBtnText}>🗑 Satırı sil</Text>
+                  <Text style={styles.rowRemoveBtnText}>Sil</Text>
                 </Pressable>
               </View>
               {row.typeId &&
-              !props.expenseTypes.some((x) => x.id === row.typeId) &&
+              !expenseTypesList.some((x) => x.id === row.typeId) &&
               props.stop.extraExpenseTypeName &&
               props.stop.extraExpenseTypeId === row.typeId ? (
                 <Text style={styles.orphanTypeHint}>
                   Kayıtlı tür (profilde yok): {props.stop.extraExpenseTypeName}
                 </Text>
               ) : null}
-              {props.expenseTypes.length > 0 ? (
+              {expenseTypesList.length > 0 ? (
                 <View style={styles.typeChips}>
                   <Pressable
                     onPress={() => updateExpenseRow(row.expenseId, { typeId: '' })}
@@ -549,7 +654,7 @@ export function StopCard(props: Props) {
                       Tür yok
                     </Text>
                   </Pressable>
-                  {props.expenseTypes.map((et) => (
+                  {expenseTypesList.map((et) => (
                     <Pressable
                       key={et.id}
                       onPress={() => updateExpenseRow(row.expenseId, { typeId: et.id })}
@@ -579,22 +684,29 @@ export function StopCard(props: Props) {
           ))}
 
           <View style={{ marginTop: appTheme.space.sm }}>
-            <PrimaryButton title="+ Masraf satırı ekle" variant="outline" onPress={addExpenseRow} />
+            <PrimaryButton
+              title="+ Satır ekle"
+              variant="outline"
+              size="compact"
+              onPress={addExpenseRow}
+            />
           </View>
 
           <View style={styles.expenseActionColumn}>
             <PrimaryButton
-              title={props.isAdmin ? '💾 Masrafları kaydet' : '📤 Masraf önerisi gönder'}
+              title={props.isAdmin ? 'Kaydet' : 'Öneri gönder'}
+              size="compact"
               onPress={handleSaveAllExpenses}
               disabled={proposing || savingCost}
               loading={savingCost || proposing}
             />
             {(normalizedExtras.length > 0 || expenseRows.length > 0) && (
               <>
-                <View style={{ height: appTheme.space.sm }} />
+                <View style={{ height: appTheme.space.xs }} />
                 <PrimaryButton
-                  title="🗑 Tüm masrafları sil"
+                  title="Tümünü sil"
                   variant="danger"
+                  size="compact"
                   onPress={handleClearCost}
                   disabled={proposing || savingCost}
                 />
@@ -605,8 +717,9 @@ export function StopCard(props: Props) {
           {props.onRelocateWithSearch ? (
             <View style={{ marginTop: appTheme.space.sm }}>
               <PrimaryButton
-                title="📍 Konumu haritadan / arama ile seç"
+                title="Konum seç"
                 variant="outline"
+                size="compact"
                 onPress={props.onRelocateWithSearch}
               />
             </View>
@@ -633,39 +746,11 @@ export function StopCard(props: Props) {
               ) : null}
             </View>
           ) : null}
-          <Text style={styles.viewerHint}>Bu durağı görüntülüyorsun. Yorum ekleyebilirsin.</Text>
+          <Text style={styles.viewerHint}>
+            Bu durağı görüntülüyorsun. Notlarını rota sayfasındaki «Yorumlar» bölümünden paylaşabilirsin.
+          </Text>
         </>
       )}
-
-          <Pressable onPress={toggleExpand} style={styles.commentToggle}>
-            <Text style={styles.commentToggleText}>
-              Yorumlar ({comments.length}) {expanded ? '▼' : '▶'}
-            </Text>
-          </Pressable>
-          {expanded ? (
-            <View style={styles.commentBox}>
-              {comments.map((c) => (
-                <View key={c.commentId} style={styles.commentRow}>
-                  <Text style={styles.commentAuthor}>{props.displayName(c.userId)}</Text>
-                  <Text style={styles.commentTime}>{formatCommentTime(c.timestamp)}</Text>
-                  <Text style={styles.commentMessage}>{c.message}</Text>
-                </View>
-              ))}
-              <View style={{ height: appTheme.space.sm }} />
-              <TextField
-                label=""
-                value={newComment}
-                placeholder="Yorum yaz..."
-                onChangeText={setNewComment}
-              />
-              <PrimaryButton
-                title="Gönder"
-                onPress={handleAddComment}
-                loading={postingComment}
-                disabled={!newComment.trim()}
-              />
-            </View>
-          ) : null}
         </ScrollView>
       ) : null}
     </View>
@@ -699,7 +784,7 @@ function createStopCardStyles(t: AppTheme) {
     },
     cardTopRow: {
       flexDirection: 'row',
-      alignItems: 'center',
+      alignItems: 'flex-start',
       gap: 8,
       paddingVertical: 2,
     },
@@ -708,6 +793,23 @@ function createStopCardStyles(t: AppTheme) {
       flexDirection: 'row',
       alignItems: 'flex-start',
       gap: 8,
+      minWidth: 0,
+    },
+    /** Kapalı özet: Onaylı butonunun altı dahil kartın tam iç genişliği */
+    peekFullWidthTap: {
+      alignSelf: 'stretch',
+      width: '100%',
+      marginTop: 4,
+      paddingBottom: 2,
+    },
+    collapsedTitleRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 8,
+      width: '100%',
+    },
+    headerTitleOnlyCol: {
+      flex: 1,
       minWidth: 0,
     },
     stopIndexBadge: {
@@ -726,25 +828,44 @@ function createStopCardStyles(t: AppTheme) {
       fontSize: t.font.tiny,
       fontWeight: '900',
     },
+    headerRightActions: {
+      flexDirection: 'column',
+      alignItems: 'flex-end',
+      justifyContent: 'flex-start',
+      gap: 6,
+      flexShrink: 0,
+    },
+    chevronBtn: {
+      paddingVertical: 2,
+      paddingHorizontal: 4,
+      minWidth: 28,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     rowChevron: {
-      fontSize: 11,
+      fontSize: 12,
       color: t.color.muted,
       fontWeight: '800',
-      marginTop: 6,
-      width: 16,
+      lineHeight: 16,
+      textAlign: 'center',
     },
-    headerTextCol: { flex: 1, minWidth: 0 },
+    headerTextCol: { flex: 1, minWidth: 0, alignSelf: 'stretch' },
     stopNameCollapsed: {
       color: t.color.text,
       fontSize: t.font.small,
       fontWeight: '800',
     },
-    peekSubtitle: {
+    peekSummary: {
+      gap: 4,
+      alignSelf: 'stretch',
+      width: '100%',
+    },
+    peekLine: {
       color: t.color.muted,
       fontSize: t.font.tiny,
       fontWeight: '600',
-      marginTop: 3,
-      lineHeight: 16,
+      lineHeight: 18,
+      alignSelf: 'stretch',
     },
     savedCostBox: {
       marginTop: t.space.sm,
@@ -813,22 +934,16 @@ function createStopCardStyles(t: AppTheme) {
       fontWeight: '800',
     },
     rowRemoveBtn: {
-      paddingVertical: 8,
-      paddingHorizontal: 12,
+      paddingVertical: 5,
+      paddingHorizontal: 10,
       borderRadius: t.radius.pill,
-      borderWidth: 2,
+      borderWidth: 1.5,
       borderColor: t.color.danger,
       backgroundColor: t.color.surface,
       ...t.shadowSoft,
     },
     rowRemoveBtnPressed: { backgroundColor: 'rgba(239, 68, 68, 0.12)' },
-    rowRemoveBtnText: { color: t.color.danger, fontSize: t.font.small, fontWeight: '800' },
-    savedCostHint: {
-      color: t.color.muted,
-      fontSize: t.font.small,
-      marginTop: 8,
-      lineHeight: 18,
-    },
+    rowRemoveBtnText: { color: t.color.danger, fontSize: t.font.tiny, fontWeight: '800' },
     expenseActionColumn: {
       marginTop: t.space.md,
       alignSelf: 'stretch',
@@ -864,7 +979,6 @@ function createStopCardStyles(t: AppTheme) {
     statusBtnCompact: {
       paddingHorizontal: 8,
       paddingVertical: 5,
-      alignSelf: 'flex-start',
     },
     statusApproved: { backgroundColor: t.color.primarySoft },
     statusBtnText: { color: t.color.text, fontSize: t.font.small, fontWeight: '700' },
@@ -877,26 +991,48 @@ function createStopCardStyles(t: AppTheme) {
     },
     timeCol: { flex: 1, minWidth: 0 },
     coordRow: { flexDirection: 'row', marginTop: t.space.sm },
-    smallBtn: { alignSelf: 'flex-start', paddingVertical: 6, paddingRight: 8, marginTop: 4 },
-    smallBtnText: { color: t.color.primary, fontSize: t.font.small, fontWeight: '700' },
+    smallBtn: { alignSelf: 'flex-start', paddingVertical: 4, paddingRight: 6, marginTop: 4 },
+    smallBtnText: { color: t.color.primary, fontSize: t.font.tiny, fontWeight: '700' },
     muted: { color: t.color.muted, fontSize: t.font.small, marginTop: 4 },
-    commentToggle: { marginTop: t.space.sm, paddingVertical: 6 },
-    commentToggleText: { color: t.color.primary, fontSize: t.font.small, fontWeight: '700' },
-    commentBox: { marginTop: t.space.xs, paddingTop: t.space.sm, borderTopWidth: 1, borderTopColor: t.color.subtle },
-    commentRow: { marginBottom: t.space.sm },
-    commentAuthor: { color: t.color.text, fontSize: t.font.small, fontWeight: '700' },
-    commentTime: { color: t.color.muted, fontSize: 12, marginTop: 2 },
-    commentMessage: { color: t.color.text, fontSize: t.font.body, marginTop: 4 },
     typeLabel: {
       color: t.color.textSecondary,
       fontSize: t.font.small,
       fontWeight: '700',
       marginTop: t.space.sm,
     },
+    expenseTypesEmptyBox: {
+      marginTop: t.space.sm,
+      padding: t.space.md,
+      borderRadius: t.radius.md,
+      borderWidth: 1,
+      borderColor: t.color.primary,
+      backgroundColor: t.color.primarySoft,
+    },
+    expenseTypesEmptyText: {
+      color: t.color.text,
+      fontSize: t.font.small,
+      lineHeight: 20,
+      fontWeight: '600',
+    },
+    expenseTypesProfileBtn: {
+      alignSelf: 'flex-start',
+      marginTop: t.space.sm,
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderRadius: t.radius.pill,
+      backgroundColor: t.color.surface,
+      borderWidth: 1,
+      borderColor: t.color.primary,
+    },
+    expenseTypesProfileBtnText: {
+      color: t.color.primaryDark,
+      fontSize: t.font.small,
+      fontWeight: '800',
+    },
     typeChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
     typeChip: {
-      paddingHorizontal: 12,
-      paddingVertical: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
       borderRadius: t.radius.pill,
       borderWidth: 1,
       borderColor: t.color.border,
@@ -907,7 +1043,7 @@ function createStopCardStyles(t: AppTheme) {
       borderColor: t.color.primary,
       backgroundColor: t.color.primarySoft,
     },
-    typeChipText: { color: t.color.text, fontSize: t.font.small, fontWeight: '600' },
+    typeChipText: { color: t.color.text, fontSize: t.font.tiny, fontWeight: '600' },
     typeChipTextOn: { color: t.color.primaryDark, fontWeight: '800' },
     orphanTypeHint: {
       color: t.color.textSecondary,

@@ -21,9 +21,33 @@ export function planTimeToDate(hhmm: string): Date {
   return d;
 }
 
-/** Date → "HH:mm" (24 saat) */
+/** Date → "HH:mm" (24 saat, yalnızca JS yerel saati) */
 export function dateToPlanTime(d: Date): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/**
+ * @react-native-community/datetimepicker onChange çıktısı → "HH:mm".
+ * Native katmanın verdiği utcOffset (dakika, UTC'nin doğusunda pozitif) ile hesaplanır;
+ * böylece JS tarafında getHours() ile cihaz saati arasındaki +/−1 saat kaymaları önlenir.
+ */
+export function dateToPlanTimeFromPickerEvent(
+  ev: { nativeEvent?: { timestamp?: number; utcOffset?: number } },
+  date: Date
+): string {
+  const ne = ev.nativeEvent;
+  const ts = typeof ne?.timestamp === 'number' && Number.isFinite(ne.timestamp) ? ne.timestamp : date.getTime();
+  const offRaw = ne?.utcOffset;
+  const off =
+    typeof offRaw === 'number' && Number.isFinite(offRaw)
+      ? offRaw
+      : -date.getTimezoneOffset();
+  const d = new Date(ts);
+  let total = d.getUTCHours() * 60 + d.getUTCMinutes() + Math.round(off);
+  total = ((total % 1440) + 1440) % 1440;
+  const hh = Math.floor(total / 60);
+  const mm = total % 60;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
 }
 
 export function formatPlanTimeRange(start?: string, end?: string): string {
@@ -31,4 +55,20 @@ export function formatPlanTimeRange(start?: string, end?: string): string {
   if (start) return `${start}’den itibaren`;
   if (end) return `${end}’e kadar`;
   return '';
+}
+
+/**
+ * Varış ve kalkış saatleri (HH:mm) arası kalış süresi (dakika).
+ * Aynı gün varsayılır; kalkış < varış ise ertesi güne sarılır.
+ */
+export function stayMinutesBetweenTimes(arrival?: string | null, departure?: string | null): number | null {
+  const a = arrival && normalizePlanTime(arrival);
+  const d = departure && normalizePlanTime(departure);
+  if (!a || !d) return null;
+  const t0 = planTimeToDate(a).getTime();
+  const t1 = planTimeToDate(d).getTime();
+  let diffMin = (t1 - t0) / 60000;
+  if (diffMin < 0) diffMin += 24 * 60;
+  if (!Number.isFinite(diffMin) || diffMin < 0) return null;
+  return Math.round(diffMin);
 }

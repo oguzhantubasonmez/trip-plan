@@ -7,12 +7,15 @@ export function TextField(props: {
   label: string;
   value: string;
   placeholder?: string;
-  keyboardType?: 'default' | 'phone-pad' | 'number-pad';
+  keyboardType?: 'default' | 'email-address' | 'phone-pad' | 'number-pad';
   onChangeText: (v: string) => void;
   helperText?: string;
   errorText?: string;
   autoFocus?: boolean;
   maxLength?: number;
+  secureTextEntry?: boolean;
+  autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
+  autoCorrect?: boolean;
 }) {
   const theme = useAppTheme();
   const styles = useMemo(() => createTextFieldStyles(theme), [theme]);
@@ -25,10 +28,13 @@ export function TextField(props: {
         placeholder={props.placeholder}
         placeholderTextColor={theme.color.muted}
         value={props.value}
-        keyboardType={props.keyboardType}
+        keyboardType={props.keyboardType ?? 'default'}
         onChangeText={props.onChangeText}
         autoFocus={props.autoFocus}
         maxLength={props.maxLength}
+        secureTextEntry={props.secureTextEntry}
+        autoCapitalize={props.autoCapitalize ?? 'sentences'}
+        autoCorrect={props.autoCorrect !== false}
       />
       {props.errorText ? <Text style={styles.error}>{props.errorText}</Text> : null}
       {!props.errorText && props.helperText ? <Text style={styles.helper}>{props.helperText}</Text> : null}

@@ -2,6 +2,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useCallback, useMemo, useState } from 'react';
 import * as Clipboard from 'expo-clipboard';
+import { LinearGradient } from 'expo-linear-gradient';
 import {
   ActivityIndicator,
   Alert,
@@ -12,6 +13,7 @@ import {
   Share,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { AddPlaceModal } from '../components/AddPlaceModal';
@@ -38,6 +40,7 @@ import {
   getStopsForTrip,
   getTrip,
   recalculateLegsForTrip,
+  repairAttendeeIdsFromAttendeesIfAdmin,
   reorderStops,
   updateAttendeeRsvp,
   updateStopFromPayload,
@@ -45,14 +48,25 @@ import {
   updateTripDistanceAndFuel,
   updateTripVehiclePlanning,
 } from '../services/trips';
+import {
+  addTripComment,
+  getCommentsForTripReliable,
+  normalizeTripIdForComments,
+} from '../services/comments';
 import type { Group } from '../types/group';
+import type { Comment } from '../types/comment';
 import type { Stop as StopType, Trip } from '../types/trip';
 import type { EditStopPayload, TripProposal } from '../types/tripProposal';
 import type { ExpenseType, UserProfile } from '../services/userProfile';
-import { useAppTheme } from '../ThemeContext';
+import { useAppTheme, useThemeMode } from '../ThemeContext';
 import type { AppTheme } from '../theme';
 import type { RootStackParamList } from '../navigation/types';
-import { formatTripScheduleSummary } from '../utils/tripSchedule';
+import {
+  effectiveStopYmd,
+  formatTripDayTr,
+  formatTripScheduleSummary,
+  sortStopsByRoute,
+} from '../utils/tripSchedule';
 import { normalizeStopExtraExpenses, stopExtraTotal } from '../utils/stopExpenses';
 
 const RSVP_LABELS: Record<string, string> = {
@@ -60,6 +74,20 @@ const RSVP_LABELS: Record<string, string> = {
   maybe: 'Belki',
   declined: 'Katılamıyorum',
 };
+
+function formatTripCommentTime(ts: any): string {
+  if (!ts?.toMillis) return '';
+  try {
+    return new Date(ts.toMillis()).toLocaleString('tr-TR', {
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '';
+  }
+}
 
 export function TripDetailScreen(props: {
   tripId: string;
@@ -93,9 +121,17 @@ export function TripDetailScreen(props: {
   const [planExtraBreakdownOpen, setPlanExtraBreakdownOpen] = useState(false);
   const [deleteStopTarget, setDeleteStopTarget] = useState<StopType | null>(null);
   const [deleteStopBusy, setDeleteStopBusy] = useState(false);
+  const [tripComments, setTripComments] = useState<Comment[]>([]);
+  const [tripCommentDraft, setTripCommentDraft] = useState('');
+  const [postingTripComment, setPostingTripComment] = useState(false);
   const currentUid = auth.currentUser?.uid;
   const appTheme = useAppTheme();
+  const { mode } = useThemeMode();
   const styles = useMemo(() => createTripDetailStyles(appTheme), [appTheme]);
+  const chatPanelGradientColors = useMemo((): [string, string, string] => {
+    if (mode === 'dark') return ['#0B1524', '#132A42', '#1B3654'];
+    return ['#C8E8F7', '#E2F3FB', '#FFF4E8'];
+  }, [mode]);
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
   const inviteUrl =
@@ -106,30 +142,96 @@ export function TripDetailScreen(props: {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    const sideErrors: string[] = [];
+
     try {
-      const [t, s] = await Promise.all([getTrip(props.tripId), getStopsForTrip(props.tripId)]);
+      let t: Trip | null;
+      try {
+        t = await getTrip(props.tripId);
+      } catch (e: any) {
+        setTrip(null);
+        setStops([]);
+        setTripComments([]);
+        setError(e?.message || 'Rota yüklenemedi.');
+        return;
+      }
+
       setTrip(t ?? null);
-      setStops(s);
-      if (t) {
-        const pend = await getPendingProposalsForTrip(props.tripId);
-        setProposals(pend);
-        setVehicleLabelInput(t.vehicleLabel ?? '');
-        const meForTrip = currentUid ? await getUserProfile(currentUid) : null;
-        const cons =
-          t.tripConsumptionLPer100km != null
-            ? String(t.tripConsumptionLPer100km)
-            : meForTrip?.carConsumption
-              ? String(meForTrip.carConsumption)
-              : '';
-        setTripConsumptionInput(cons);
-        setFuelPriceTripInput(
-          t.fuelPricePerLiter != null ? String(t.fuelPricePerLiter) : ''
+      if (!t) {
+        setStops([]);
+        setTripComments([]);
+        if (currentUid) {
+          try {
+            const me = await getUserProfile(currentUid);
+            setMyExpenseTypes(me?.expenseTypes ?? []);
+          } catch {
+            setMyExpenseTypes([]);
+          }
+        } else {
+          setMyExpenseTypes([]);
+        }
+        return;
+      }
+
+      if (currentUid && t.adminId === currentUid) {
+        try {
+          await repairAttendeeIdsFromAttendeesIfAdmin(props.tripId, currentUid);
+        } catch {
+          /* attendeeIds onarımı başarısız olsa da devam; güncel kurallar attendees ile de üyelik tanır */
+        }
+      }
+
+      /** Durak / yorum sorgusu reddedilirse Promise.all tüm load’u düşürüp trip’i null bırakıyordu → “Rota bulunamadı” yanılgısı. */
+      const tripIdNorm = normalizeTripIdForComments(props.tripId);
+      const [stopsRes, commentsRes] = await Promise.allSettled([
+        getStopsForTrip(props.tripId),
+        getCommentsForTripReliable(tripIdNorm),
+      ]);
+      if (stopsRes.status === 'fulfilled') {
+        setStops(stopsRes.value);
+      } else {
+        sideErrors.push(
+          (stopsRes.reason as Error)?.message || 'Duraklar yüklenemedi (izin veya ağ).'
         );
       }
-      if (t?.attendees?.length) {
-        const uids = t.attendees.map((a) => a.uid);
+      let tripCommentsList: Comment[] = [];
+      if (commentsRes.status === 'fulfilled') {
+        tripCommentsList = commentsRes.value;
+        setTripComments(commentsRes.value);
+      } else {
+        sideErrors.push(
+          (commentsRes.reason as Error)?.message || 'Yorumlar yüklenemedi (izin veya ağ).'
+        );
+        /** Reddedilen sorguda listeyi sıfırlama — gönderilen yorum kayboluyordu. */
+      }
+
+      try {
+        const pend = await getPendingProposalsForTrip(props.tripId);
+        setProposals(pend);
+      } catch (e: any) {
+        setProposals([]);
+        sideErrors.push(e?.message || 'Öneriler yüklenemedi.');
+      }
+
+      setVehicleLabelInput(t.vehicleLabel ?? '');
+      const meForTrip = currentUid ? await getUserProfile(currentUid) : null;
+      const cons =
+        t.tripConsumptionLPer100km != null
+          ? String(t.tripConsumptionLPer100km)
+          : meForTrip?.carConsumption
+            ? String(meForTrip.carConsumption)
+            : '';
+      setTripConsumptionInput(cons);
+      setFuelPriceTripInput(t.fuelPricePerLiter != null ? String(t.fuelPricePerLiter) : '');
+
+      {
+        const uids = (t.attendees ?? []).map((a) => a.uid);
         const myProfile = currentUid ? await getUserProfile(currentUid) : null;
         const allUids = [...uids];
+        if (currentUid && !allUids.includes(currentUid)) allUids.push(currentUid);
+        for (const c of tripCommentsList) {
+          if (c.userId && !allUids.includes(c.userId)) allUids.push(c.userId);
+        }
         if (myProfile?.friends?.length) {
           myProfile.friends.forEach((f) => {
             if (!allUids.includes(f)) allUids.push(f);
@@ -144,21 +246,35 @@ export function TripDetailScreen(props: {
         );
         setUserProfiles(map);
       }
-      if (currentUid && t) {
-        const [me, groupList] = await Promise.all([
-          getUserProfile(currentUid),
-          getGroupsForUser(currentUid),
-        ]);
-        setFriendUids(me?.friends ?? []);
-        setGroups(groupList);
-        setMyExpenseTypes(me?.expenseTypes ?? []);
-      } else if (currentUid) {
-        const me = await getUserProfile(currentUid);
-        setMyExpenseTypes(me?.expenseTypes ?? []);
+
+      if (currentUid) {
+        try {
+          const [me, groupList] = await Promise.all([
+            getUserProfile(currentUid),
+            getGroupsForUser(currentUid),
+          ]);
+          setFriendUids(me?.friends ?? []);
+          setGroups(groupList);
+          setMyExpenseTypes(me?.expenseTypes ?? []);
+        } catch (e: any) {
+          setGroups([]);
+          try {
+            const me = await getUserProfile(currentUid);
+            setFriendUids(me?.friends ?? []);
+            setMyExpenseTypes(me?.expenseTypes ?? []);
+          } catch {
+            setFriendUids([]);
+            setMyExpenseTypes([]);
+          }
+          sideErrors.push(e?.message || 'Arkadaş grupları yüklenemedi.');
+        }
       } else {
         setMyExpenseTypes([]);
       }
-      if (t?.totalDistance != null && t.totalDistance > 0) setDistanceInput(String(t.totalDistance));
+
+      if (t.totalDistance != null && t.totalDistance > 0) setDistanceInput(String(t.totalDistance));
+
+      if (sideErrors.length > 0) setError(sideErrors.join('\n'));
     } catch (e: any) {
       setError(e?.message || 'Yüklenemedi.');
     } finally {
@@ -173,10 +289,14 @@ export function TripDetailScreen(props: {
   );
 
   const friendsNotInTrip = useMemo(() => {
-    if (!trip) return [];
+    if (!trip || !currentUid) return [];
     const inTrip = new Set(trip.attendees.map((a) => a.uid));
-    return friendUids.filter((uid) => !inTrip.has(uid));
-  }, [trip, friendUids]);
+    return friendUids.filter((uid) => {
+      if (inTrip.has(uid)) return false;
+      const p = userProfiles.get(uid);
+      return Boolean(p?.friends?.includes(currentUid));
+    });
+  }, [trip, friendUids, userProfiles, currentUid]);
 
   const goingCount = useMemo(
     () => trip?.attendees.filter((a) => a.rsvp === 'going').length ?? 0,
@@ -240,12 +360,56 @@ export function TripDetailScreen(props: {
     [stops]
   );
 
+  const routeOrderedStops = useMemo(
+    () => sortStopsByRoute(stops, trip?.startDate ?? ''),
+    [stops, trip?.startDate]
+  );
+
+  const stopsWithDayHeaders = useMemo(() => {
+    const start = trip?.startDate ?? '';
+    const out: { stop: StopType; showDayHeader: boolean; dayLabel: string }[] = [];
+    let prev = '';
+    for (const s of routeOrderedStops) {
+      const dk = effectiveStopYmd(s, start);
+      const show = dk !== prev;
+      prev = dk;
+      out.push({
+        stop: s,
+        showDayHeader: show,
+        dayLabel: formatTripDayTr(dk) || dk,
+      });
+    }
+    return out;
+  }, [routeOrderedStops, trip?.startDate]);
+
+  const defaultNewStopDay = useMemo(() => {
+    if (!trip?.startDate?.trim()) return '';
+    if (stops.length === 0) return trip.startDate.trim();
+    const byOrder = [...stops].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const last = byOrder[byOrder.length - 1];
+    return (last.stopDate?.trim() || trip.startDate).trim();
+  }, [trip?.startDate, stops]);
+
+  const tripDatePickerRange = useMemo(() => {
+    if (!trip?.startDate?.trim()) return null;
+    const start = trip.startDate.trim();
+    const end = (trip.endDate?.trim() || start).trim();
+    const def =
+      defaultNewStopDay && /^\d{4}-\d{2}-\d{2}$/.test(defaultNewStopDay)
+        ? defaultNewStopDay
+        : start;
+    return { start, end, defaultDay: def };
+  }, [trip?.startDate, trip?.endDate, defaultNewStopDay]);
+
   const displayName = (uid: string) =>
     userProfiles.get(uid)?.displayName?.trim() || userProfiles.get(uid)?.phoneNumber || uid.slice(0, 8);
 
   async function handlePlacePicked(params: {
     locationName: string;
     coords: { latitude: number; longitude: number };
+    stopDate?: string;
+    placeRating?: number;
+    placeUserRatingsTotal?: number;
   }) {
     const relocating = relocateStopId;
     setRelocateStopId(null);
@@ -259,16 +423,26 @@ export function TripDetailScreen(props: {
       const canPropose = isEditor && !isTripAdmin;
       setError(null);
       try {
+        const ratingPayload = {
+          placeRating:
+            params.placeRating != null && params.placeRating > 0 ? params.placeRating : null,
+          placeUserRatingsTotal:
+            params.placeUserRatingsTotal != null && params.placeUserRatingsTotal > 0
+              ? params.placeUserRatingsTotal
+              : null,
+        };
         if (isTripAdmin) {
           await updateStopFromPayload(relocating, {
             locationName: params.locationName,
             coords: params.coords,
+            ...ratingPayload,
           });
           await recalculateLegsForTrip(props.tripId);
         } else if (canPropose) {
           await handleProposeChange(relocating, {
             locationName: params.locationName,
             coords: params.coords,
+            ...ratingPayload,
           });
         }
       } catch (e: any) {
@@ -286,7 +460,20 @@ export function TripDetailScreen(props: {
         status: trip.adminId === currentUid ? 'approved' : 'pending',
         coords: params.coords,
         order: stops.length,
+        ...(params.stopDate?.trim() ? { stopDate: params.stopDate.trim() } : {}),
+        ...(params.placeRating != null && params.placeRating > 0
+          ? { placeRating: params.placeRating }
+          : {}),
+        ...(params.placeUserRatingsTotal != null && params.placeUserRatingsTotal > 0
+          ? { placeUserRatingsTotal: params.placeUserRatingsTotal }
+          : {}),
       });
+      const merged = await getStopsForTrip(props.tripId);
+      const sorted = sortStopsByRoute(merged, trip.startDate ?? '');
+      await reorderStops(
+        props.tripId,
+        sorted.map((s) => s.stopId)
+      );
       try {
         await recalculateLegsForTrip(props.tripId);
       } catch (e: any) {
@@ -308,8 +495,10 @@ export function TripDetailScreen(props: {
   }
 
   async function handleMoveStop(index: number, direction: 'up' | 'down') {
-    if (trip?.adminId !== currentUid || stops.length < 2) return;
-    const newOrder = [...stops];
+    if (trip?.adminId !== currentUid) return;
+    const routeList = sortStopsByRoute(stops, trip?.startDate ?? '');
+    if (routeList.length < 2) return;
+    const newOrder = [...routeList];
     const swap = direction === 'up' ? index - 1 : index + 1;
     if (swap < 0 || swap >= newOrder.length) return;
     [newOrder[index], newOrder[swap]] = [newOrder[swap], newOrder[index]];
@@ -459,7 +648,7 @@ export function TripDetailScreen(props: {
       }
       await load();
     } catch (e: any) {
-      setError(e?.message || 'Bacaklar hesaplanamadı.');
+      setError(e?.message || 'Duraklar arası yol hesaplanamadı.');
     } finally {
       setRecalculatingLegs(false);
     }
@@ -497,7 +686,7 @@ export function TripDetailScreen(props: {
     const dist =
       distanceFromLegs > 0 ? distanceFromLegs : !isNaN(distManual) && distManual > 0 ? distManual : NaN;
     if (isNaN(dist) || dist < 0) {
-      setError('Mesafe: bacakları güncelle veya km gir.');
+      setError('Mesafe: «Duraklar arası mesafe/süre güncelle» ile hesaplat veya toplam km’yi elle gir.');
       return;
     }
     let totalFuelCost = trip.totalFuelCost ?? 0;
@@ -545,7 +734,7 @@ export function TripDetailScreen(props: {
     return (
       <Screen>
         <View style={styles.centered}>
-          <Text style={styles.error}>Rota bulunamadı.</Text>
+          <Text style={styles.error}>{error?.trim() ? error : 'Rota bulunamadı.'}</Text>
           <View style={{ height: appTheme.space.md }} />
           <PrimaryButton title="Geri" onPress={props.onBack} />
         </View>
@@ -588,6 +777,16 @@ export function TripDetailScreen(props: {
     const x = p.payload;
     const parts: string[] = [];
     if (x.locationName) parts.push(`Ad: ${x.locationName}`);
+    if (x.stopDate) parts.push(`Gün: ${x.stopDate}`);
+    if (x.placeRating != null && x.placeRating > 0) {
+      parts.push(
+        `Puan: ${x.placeRating.toFixed(1)}${
+          x.placeUserRatingsTotal != null && x.placeUserRatingsTotal > 0
+            ? ` (${x.placeUserRatingsTotal})`
+            : ''
+        }`
+      );
+    }
     if (x.arrivalTime || x.departureTime)
       parts.push(`Saat: ${x.arrivalTime ?? '–'} – ${x.departureTime ?? '–'}`);
     if (x.extraExpenses && Array.isArray(x.extraExpenses) && x.extraExpenses.length > 0) {
@@ -606,6 +805,54 @@ export function TripDetailScreen(props: {
 
   function stopNameForProposal(stopId: string): string {
     return stops.find((s) => s.stopId === stopId)?.locationName ?? 'Durak';
+  }
+
+  const isTripParticipant = Boolean(
+    currentUid && trip.attendees.some((a) => a.uid === currentUid)
+  );
+
+  async function handlePostTripComment() {
+    if (!currentUid || !isTripParticipant) return;
+    const text = tripCommentDraft.trim();
+    if (!text) return;
+    setPostingTripComment(true);
+    setError(null);
+    try {
+      const tid = normalizeTripIdForComments(props.tripId);
+      const commentId = await addTripComment({
+        tripId: tid,
+        userId: currentUid,
+        message: text,
+      });
+      setTripCommentDraft('');
+      /** Sunucu listesi gelene kadar (veya sorgu reddedilirse) yorum ekranda kalsın. */
+      setTripComments((prev) => {
+        const optimistic: Comment = {
+          commentId,
+          userId: currentUid,
+          message: text,
+          timestamp: null,
+          tripId: tid,
+        };
+        const next = [...prev.filter((c) => c.commentId !== commentId), optimistic];
+        next.sort(
+          (a, b) => (a.timestamp?.toMillis?.() ?? 0) - (b.timestamp?.toMillis?.() ?? 0)
+        );
+        return next;
+      });
+      await load();
+    } catch (e: any) {
+      const code = e?.code as string | undefined;
+      if (code === 'permission-denied') {
+        setError(
+          'Yorum izni reddedildi. Firebase’de güncel kuralları yayınladığından emin ol (trips/{tripId}/comments ve kök comments). Rota belgesinde attendeeIds senkron olsun.'
+        );
+      } else {
+        setError(e?.message || 'Yorum gönderilemedi.');
+      }
+    } finally {
+      setPostingTripComment(false);
+    }
   }
 
   return (
@@ -760,9 +1007,9 @@ export function TripDetailScreen(props: {
           />
           <View style={styles.fieldSpacer} />
           <TextField
-            label="Toplam mesafe (km) — bacak yoksa"
+            label="Toplam mesafe (km) — duraklar arası yoksa"
             value={distanceInput}
-            placeholder={distanceFromLegs > 0 ? `Bacaklar: ${distanceFromLegs} km` : 'Örn. 350'}
+            placeholder={distanceFromLegs > 0 ? `Duraklar arası: ${distanceFromLegs} km` : 'Örn. 350'}
             keyboardType="number-pad"
             onChangeText={setDistanceInput}
           />
@@ -923,7 +1170,7 @@ export function TripDetailScreen(props: {
             </View>
           ) : (
             <Text style={styles.mutedCompact}>
-              İzleyici olarak durak ekleyemezsin; yorum yapabilirsin.
+              İzleyici olarak durak ekleyemezsin. Notlarını aşağıdaki «Yorumlar» bölümünden paylaşabilirsin.
             </Text>
           )}
           {stops.length === 0 ? (
@@ -932,65 +1179,81 @@ export function TripDetailScreen(props: {
             </View>
           ) : (
             <>
-              {stops.map((item, index) => (
-                <View key={item.stopId} style={styles.stopChainBlock}>
-                  <View style={styles.stopBlock}>
-                    <View style={styles.stopRow}>
-                      {isAdmin && (
-                        <View style={styles.orderBtns}>
-                          <Pressable
-                            onPress={() => handleMoveStop(index, 'up')}
-                            disabled={index === 0}
-                            style={[styles.orderBtn, index === 0 && styles.orderBtnDisabled]}
-                          >
-                            <Text style={styles.orderBtnText}>↑</Text>
-                          </Pressable>
-                          <Pressable
-                            onPress={() => handleMoveStop(index, 'down')}
-                            disabled={index === stops.length - 1}
-                            style={[
-                              styles.orderBtn,
-                              index === stops.length - 1 && styles.orderBtnDisabled,
-                            ]}
-                          >
-                            <Text style={styles.orderBtnText}>↓</Text>
-                          </Pressable>
+              {stopsWithDayHeaders.map(({ stop: item, showDayHeader, dayLabel }, index) => (
+                <View key={item.stopId}>
+                  {showDayHeader ? (
+                    <Text
+                      style={[styles.stopDayHeader, index === 0 ? styles.stopDayHeaderFirst : null]}
+                    >
+                      {dayLabel}
+                    </Text>
+                  ) : null}
+                  <View style={styles.stopChainBlock}>
+                    <View style={styles.stopBlock}>
+                      <View style={styles.stopRow}>
+                        {isAdmin && (
+                          <View style={styles.orderBtns}>
+                            <Pressable
+                              onPress={() => handleMoveStop(index, 'up')}
+                              disabled={index === 0}
+                              style={[styles.orderBtn, index === 0 && styles.orderBtnDisabled]}
+                            >
+                              <Text style={styles.orderBtnText}>↑</Text>
+                            </Pressable>
+                            <Pressable
+                              onPress={() => handleMoveStop(index, 'down')}
+                              disabled={index === routeOrderedStops.length - 1}
+                              style={[
+                                styles.orderBtn,
+                                index === routeOrderedStops.length - 1 && styles.orderBtnDisabled,
+                              ]}
+                            >
+                              <Text style={styles.orderBtnText}>↓</Text>
+                            </Pressable>
+                          </View>
+                        )}
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <StopCard
+                            stop={item}
+                            stopIndex={index}
+                            tripStartDate={trip.startDate}
+                            tripEndDate={trip.endDate || trip.startDate}
+                            expenseTypes={myExpenseTypes}
+                            isAdmin={isAdmin}
+                            canProposeChanges={editorCanPropose}
+                            currentUid={currentUid}
+                            userProfiles={userProfiles}
+                            displayName={displayName}
+                            onToggleStatus={() => handleToggleStopStatus(item)}
+                            onRefresh={load}
+                            onProposeChange={
+                              editorCanPropose ? handleProposeChange : undefined
+                            }
+                            onRelocateWithSearch={
+                              isAdmin || editorCanPropose
+                                ? () => setRelocateStopId(item.stopId)
+                                : undefined
+                            }
+                            onLongPressDelete={
+                              isAdmin ? () => openDeleteStopModal(item) : undefined
+                            }
+                            onOpenProfileForExpenseTypes={
+                              isAdmin || editorCanPropose
+                                ? () => navigation.navigate('Profile')
+                                : undefined
+                            }
+                          />
                         </View>
-                      )}
-                      <View style={{ flex: 1, minWidth: 0 }}>
-                        <StopCard
-                          stop={item}
-                          stopIndex={index}
-                          expenseTypes={myExpenseTypes}
-                          isAdmin={isAdmin}
-                          canProposeChanges={editorCanPropose}
-                          currentUid={currentUid}
-                          userProfiles={userProfiles}
-                          displayName={displayName}
-                          onToggleStatus={() => handleToggleStopStatus(item)}
-                          onRefresh={load}
-                          onProposeChange={
-                            editorCanPropose ? handleProposeChange : undefined
-                          }
-                          onRelocateWithSearch={
-                            isAdmin || editorCanPropose
-                              ? () => setRelocateStopId(item.stopId)
-                              : undefined
-                          }
-                          onLongPressDelete={
-                            isAdmin ? () => openDeleteStopModal(item) : undefined
-                          }
-                        />
                       </View>
                     </View>
+                    {index < routeOrderedStops.length - 1 ? (
+                      <View style={styles.stopRouteLink} pointerEvents="none">
+                        <View style={styles.stopRouteLinkBar} />
+                        <Text style={styles.stopRouteLinkArrow}>↓</Text>
+                        <View style={styles.stopRouteLinkBar} />
+                      </View>
+                    ) : null}
                   </View>
-                  {index < stops.length - 1 ? (
-                    <View style={styles.stopRouteLink} pointerEvents="none">
-                      <View style={styles.stopRouteLinkBar} />
-                      <Text style={styles.stopRouteLinkArrow}>↓</Text>
-                      <View style={styles.stopRouteLinkBar} />
-                    </View>
-                  ) : null}
                 </View>
               ))}
             </>
@@ -1015,12 +1278,110 @@ export function TripDetailScreen(props: {
               <View style={styles.mapContainer}>
                 {(() => {
                   const { NativeMapSection } = require('../components/NativeMapSection');
-                  return <NativeMapSection stops={stops} />;
+                  return <NativeMapSection stops={routeOrderedStops} />;
                 })()}
               </View>
             )}
           </CollapsibleSection>
         ) : null}
+
+        <CollapsibleSection
+          title="Yorumlar"
+          collapsedSummary={
+            tripComments.length === 0 ? 'Henüz yorum yok' : `${tripComments.length} yorum`
+          }
+          defaultOpen={false}
+          compact
+          smallTitle
+          containerStyle={[styles.section, styles.chatSectionShell]}
+        >
+          <LinearGradient
+            colors={chatPanelGradientColors}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.chatPanelGradient}
+          >
+            {tripComments.length === 0 ? (
+              <Text style={styles.chatEmptyHint}>Henüz bu rota için yorum yok.</Text>
+            ) : (
+              <View style={styles.chatList}>
+                {tripComments.map((c) => {
+                  const mine = Boolean(currentUid && c.userId === currentUid);
+                  const initials = displayName(c.userId).trim().slice(0, 1).toUpperCase() || '?';
+                  const timeLabel = formatTripCommentTime(c.timestamp);
+                  return (
+                    <View
+                      key={c.commentId}
+                      style={[styles.chatRow, mine ? styles.chatRowMine : styles.chatRowTheirs]}
+                    >
+                      {!mine ? (
+                        <View style={styles.chatAvatar}>
+                          <Text style={styles.chatAvatarText}>{initials}</Text>
+                        </View>
+                      ) : null}
+                      <View
+                        style={[styles.chatBubble, mine ? styles.chatBubbleMine : styles.chatBubbleTheirs]}
+                      >
+                        <Text
+                          style={[styles.chatBubbleName, mine && styles.chatBubbleNameMine]}
+                          numberOfLines={1}
+                        >
+                          {displayName(c.userId)}
+                        </Text>
+                        <Text style={styles.chatBubbleMessage}>{c.message}</Text>
+                        <Text style={[styles.chatBubbleTime, mine ? styles.chatBubbleTimeMine : null]}>
+                          {timeLabel || (c.timestamp == null ? '…' : '')}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+            {isTripParticipant ? (
+              <>
+                <View style={{ height: appTheme.space.md }} />
+                <View style={styles.chatComposerRow}>
+                  <TextInput
+                    style={[styles.chatComposerInput, appTheme.shadowSoft]}
+                    placeholder="Mesajını yaz…"
+                    placeholderTextColor={appTheme.color.muted}
+                    value={tripCommentDraft}
+                    onChangeText={setTripCommentDraft}
+                    multiline
+                    maxLength={2000}
+                  />
+                  <Pressable
+                    onPress={() => void handlePostTripComment()}
+                    disabled={!tripCommentDraft.trim() || postingTripComment}
+                    style={({ pressed }) => [
+                      styles.chatSendBtn,
+                      (!tripCommentDraft.trim() || postingTripComment) && styles.chatSendBtnDisabled,
+                      pressed && tripCommentDraft.trim() && !postingTripComment ? { opacity: 0.88 } : null,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Gönder"
+                  >
+                    {postingTripComment ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.chatSendBtnIcon}>➤</Text>
+                    )}
+                  </Pressable>
+                </View>
+              </>
+            ) : (
+              <Text
+                style={[
+                  styles.chatFooterMuted,
+                  { marginTop: tripComments.length ? appTheme.space.md : appTheme.space.sm },
+                ]}
+              >
+                Yorum yapmak için bu rotanın katılımcısı olmalısın.
+              </Text>
+            )}
+          </LinearGradient>
+        </CollapsibleSection>
       </ScrollView>
 
       <Modal
@@ -1107,6 +1468,10 @@ export function TripDetailScreen(props: {
           setRelocateStopId(null);
         }}
         onAdd={handlePlacePicked}
+        pickStopDate={relocateStopId === null && tripDatePickerRange != null}
+        tripDateRange={
+          relocateStopId === null ? tripDatePickerRange ?? undefined : undefined
+        }
       />
 
       <DeleteStopConfirmModal
@@ -1288,6 +1653,151 @@ function createTripDetailStyles(t: AppTheme) {
     rejectBtn: { paddingHorizontal: 14, paddingVertical: 8 },
     rejectBtnText: { color: t.color.danger, fontSize: t.font.small, fontWeight: '700' },
     mapAddRow: { marginTop: t.space.sm, marginBottom: t.space.xs },
+    chatSectionShell: {
+      overflow: 'hidden',
+      borderColor: t.color.cardBorderPrimary,
+      borderWidth: 1.5,
+    },
+    chatPanelGradient: {
+      borderRadius: t.radius.md,
+      paddingVertical: t.space.md,
+      paddingHorizontal: t.space.sm,
+      overflow: 'hidden',
+    },
+    chatEmptyHint: {
+      color: t.color.textSecondary,
+      fontSize: t.font.small,
+      fontWeight: '600',
+      lineHeight: 21,
+      letterSpacing: 0.2,
+      textAlign: 'center',
+      paddingVertical: t.space.sm,
+      paddingHorizontal: t.space.sm,
+    },
+    chatFooterMuted: {
+      color: t.color.muted,
+      fontSize: t.font.tiny,
+      fontWeight: '600',
+      lineHeight: 18,
+      letterSpacing: 0.15,
+      textAlign: 'center',
+    },
+    chatList: { gap: 12, marginBottom: 2 },
+    chatRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      width: '100%',
+    },
+    chatRowMine: { justifyContent: 'flex-end' },
+    chatRowTheirs: { justifyContent: 'flex-start', gap: 10 },
+    chatAvatar: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: t.color.surface,
+      borderWidth: 1.5,
+      borderColor: t.color.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 3,
+      ...t.shadowSoft,
+    },
+    chatAvatarText: {
+      color: t.color.primaryDark,
+      fontSize: t.font.small,
+      fontWeight: '900',
+      letterSpacing: 0.5,
+    },
+    chatBubble: {
+      maxWidth: '84%',
+      paddingVertical: 11,
+      paddingHorizontal: 15,
+      borderRadius: 20,
+    },
+    chatBubbleMine: {
+      backgroundColor: t.color.primarySoft,
+      borderWidth: 1,
+      borderColor: t.color.cardBorderPrimary,
+      borderBottomRightRadius: 6,
+      alignSelf: 'flex-end',
+      ...t.shadowSoft,
+    },
+    chatBubbleTheirs: {
+      backgroundColor: t.color.surface,
+      borderWidth: 1,
+      borderColor: t.color.cardBorderPrimary,
+      borderBottomLeftRadius: 6,
+      ...t.shadowSoft,
+    },
+    chatBubbleName: {
+      color: t.color.ocean,
+      fontSize: 11,
+      fontWeight: '800',
+      letterSpacing: 0.6,
+      textTransform: 'uppercase' as const,
+      marginBottom: 5,
+    },
+    chatBubbleNameMine: {
+      color: t.color.primaryDark,
+      opacity: 0.85,
+    },
+    chatBubbleMessage: {
+      color: t.color.text,
+      fontSize: t.font.body,
+      lineHeight: 24,
+      fontWeight: '500',
+      letterSpacing: 0.15,
+    },
+    chatBubbleTime: {
+      color: t.color.muted,
+      fontSize: 10,
+      fontWeight: '700',
+      letterSpacing: 0.2,
+      marginTop: 8,
+      alignSelf: 'flex-end',
+    },
+    chatBubbleTimeMine: { color: t.color.primaryDark, opacity: 0.65 },
+    chatComposerRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      gap: 12,
+    },
+    chatComposerInput: {
+      flex: 1,
+      minWidth: 0,
+      backgroundColor: t.color.surface,
+      borderWidth: 1.5,
+      borderColor: t.color.cardBorderPrimary,
+      color: t.color.text,
+      borderRadius: 24,
+      paddingVertical: 12,
+      paddingHorizontal: 18,
+      fontSize: t.font.body,
+      fontWeight: '500',
+      letterSpacing: 0.2,
+      lineHeight: 22,
+      maxHeight: 120,
+      textAlignVertical: 'top',
+    },
+    chatSendBtn: {
+      width: 48,
+      height: 48,
+      borderRadius: 24,
+      backgroundColor: t.color.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 2,
+      borderWidth: 1,
+      borderColor: t.color.primaryDark,
+      ...t.shadowSoft,
+    },
+    chatSendBtnDisabled: { opacity: 0.4 },
+    chatSendBtnIcon: {
+      color: '#FFFFFF',
+      fontSize: 19,
+      fontWeight: '900',
+      marginLeft: 3,
+    },
     linkBtn: { paddingVertical: 4, paddingHorizontal: 8 },
     linkBtnText: { color: t.color.primary, fontSize: t.font.small, fontWeight: '700' },
     inviteRow: { flexDirection: 'row', gap: t.space.sm, marginBottom: t.space.sm, flexWrap: 'wrap' },
@@ -1323,6 +1833,18 @@ function createTripDetailStyles(t: AppTheme) {
       lineHeight: 20,
       marginVertical: -1,
     },
+    stopDayHeader: {
+      color: t.color.primaryDark,
+      fontSize: t.font.small,
+      fontWeight: '900',
+      marginTop: t.space.sm,
+      marginBottom: 6,
+      paddingVertical: 4,
+      paddingHorizontal: 2,
+      borderBottomWidth: 2,
+      borderBottomColor: t.color.primarySoft,
+    },
+    stopDayHeaderFirst: { marginTop: 0 },
     stopRow: { flexDirection: 'row', alignItems: 'flex-start', gap: t.space.sm },
     orderBtns: { flexDirection: 'column', gap: 2 },
     orderBtn: {

@@ -1,5 +1,5 @@
 /**
- * Rota bacakları: Google Routes API (computeRoutes) — araç yolu.
+ * Duraklar arası yol parçaları: Google Routes API (computeRoutes) — araç yolu.
  * Eski Directions API (maps.googleapis.com/maps/api/directions) birçok projede kapatıldı; Routes API açık olmalı.
  * Cloud Console: "Routes API" etkin + faturalandırma; anahtarda bu API’ye izin verin.
  */
@@ -129,7 +129,7 @@ async function fetchPairwiseRouteLegs(
 const MAX_INTERMEDIATES = 25;
 
 /**
- * Koordinat sırasına göre yol bacakları (yalnızca Routes API).
+ * Koordinat sırasına göre duraklar arası yol parçaları (yalnızca Routes API).
  */
 export async function fetchDrivingLegs(
   coords: { latitude: number; longitude: number }[]

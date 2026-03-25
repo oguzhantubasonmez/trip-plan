@@ -13,10 +13,13 @@ export function PrimaryButton(props: {
   loading?: boolean;
   testID?: string;
   variant?: Variant;
+  /** Durak kartı vb. daha küçük düğüm */
+  size?: 'default' | 'compact';
 }) {
   const theme = useAppTheme();
   const styles = useMemo(() => createPrimaryButtonStyles(theme), [theme]);
   const variant = props.variant ?? 'primary';
+  const compact = props.size === 'compact';
   const colors =
     variant === 'accent'
       ? [...theme.accentButtonGradient]
@@ -60,12 +63,15 @@ export function PrimaryButton(props: {
         disabled={props.disabled || props.loading}
         style={({ pressed }) => [
           styles.outlineBtn,
+          compact && styles.outlineBtnCompact,
           theme.shadowSoft,
           pressed && !props.disabled && !props.loading ? styles.outlinePressed : null,
           props.disabled || props.loading ? styles.disabled : null,
         ]}
       >
-        <Text style={styles.outlineText}>{props.loading ? '...' : props.title}</Text>
+        <Text style={[styles.outlineText, compact && styles.outlineTextCompact]}>
+          {props.loading ? '...' : props.title}
+        </Text>
       </Pressable>
     );
   }
@@ -106,11 +112,18 @@ function createPrimaryButtonStyles(theme: AppTheme) {
       paddingVertical: 15,
       paddingHorizontal: 22,
     },
+    innerCompact: {
+      paddingVertical: 10,
+      paddingHorizontal: 16,
+    },
     text: {
       color: '#FFFFFF',
       fontSize: theme.font.body,
       fontWeight: '800',
       letterSpacing: 0.3,
+    },
+    textCompact: {
+      fontSize: theme.font.small,
     },
     pressed: { opacity: 0.92, transform: [{ scale: 0.98 }] },
     disabled: { opacity: 0.5 },
@@ -128,6 +141,9 @@ function createPrimaryButtonStyles(theme: AppTheme) {
       color: theme.color.primaryDark,
       fontSize: theme.font.body,
       fontWeight: '800',
+    },
+    outlineTextCompact: {
+      fontSize: theme.font.small,
     },
   });
 }

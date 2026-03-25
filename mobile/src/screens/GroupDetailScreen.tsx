@@ -13,7 +13,15 @@ import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
 import { TextField } from '../components/TextField';
 import { auth } from '../lib/firebase';
-import { addMemberToGroup, getGroup, removeMemberFromGroup, updateGroup } from '../services/groups';
+import { filterMutualFriendUids } from '../services/friends';
+import {
+  getGroup,
+  inviteMemberToGroup,
+  listPendingGroupInvitesForGroup,
+  removeMemberFromGroup,
+  updateGroup,
+} from '../services/groups';
+import type { GroupInvite } from '../services/groups';
 import { getUserProfile } from '../services/userProfile';
 import type { Group } from '../types/group';
 import type { UserProfile } from '../services/userProfile';
@@ -33,6 +41,8 @@ export function GroupDetailScreen(props: {
   const [editName, setEditName] = useState('');
   const [savingName, setSavingName] = useState(false);
   const [addMemberModal, setAddMemberModal] = useState(false);
+  const [pendingInvites, setPendingInvites] = useState<GroupInvite[]>([]);
+  const [mutualFriendIds, setMutualFriendIds] = useState<string[]>([]);
   const currentUid = auth.currentUser?.uid;
 
   const load = useCallback(async () => {
@@ -56,6 +66,8 @@ export function GroupDetailScreen(props: {
         setProfiles(map);
       } else if (g) {
         setEditName(g.name);
+        setMutualFriendIds([]);
+        setPendingInvites([]);
         const map = new Map<string, UserProfile>();
         for (const id of g.memberIds) {
           const u = await getUserProfile(id);
@@ -76,16 +88,12 @@ export function GroupDetailScreen(props: {
     }, [load])
   );
 
-  const friends = useMemo(() => {
-    if (!currentUid) return [];
-    const p = profiles.get(currentUid);
-    return p?.friends ?? [];
-  }, [currentUid, profiles]);
   const friendsNotInGroup = useMemo(() => {
     if (!group) return [];
     const inGroup = new Set(group.memberIds);
-    return friends.filter((uid) => !inGroup.has(uid));
-  }, [group, friends]);
+    const pendingUids = new Set(pendingInvites.map((i) => i.toUid));
+    return mutualFriendIds.filter((uid) => !inGroup.has(uid) && !pendingUids.has(uid));
+  }, [group, mutualFriendIds, pendingInvites]);
 
   const displayName = (uid: string) =>
     profiles.get(uid)?.displayName?.trim() || profiles.get(uid)?.phoneNumber || uid.slice(0, 8);
@@ -100,13 +108,14 @@ export function GroupDetailScreen(props: {
     setSavingName(false);
   }
 
-  async function handleAddMember(uid: string) {
+  async function handleInviteMember(uid: string) {
+    if (!currentUid || !group || group.ownerId !== currentUid) return;
     try {
-      await addMemberToGroup(props.groupId, uid);
+      await inviteMemberToGroup({ groupId: props.groupId, ownerUid: currentUid, memberUid: uid });
       setAddMemberModal(false);
       await load();
     } catch (e: any) {
-      setError(e?.message || 'Üye eklenemedi.');
+      setError(e?.message || 'Davet gönderilemedi.');
     }
   }
 
@@ -180,18 +189,26 @@ export function GroupDetailScreen(props: {
             </Pressable>
           )}
         </View>
-        {group.memberIds.length === 0 ? (
-          <Text style={styles.muted}>Henüz üye yok. Arkadaşlarını gruba ekleyebilirsin.</Text>
+        {group.memberIds.length === 0 && pendingInvites.length === 0 ? (
+          <Text style={styles.muted}>Henüz üye yok. Onaylı arkadaşlarına grup daveti gönderebilirsin.</Text>
         ) : (
           <View style={styles.memberList}>
-            {group.memberIds.map((uid) => (
-              <View key={uid} style={styles.memberRow}>
-                <Text style={styles.memberName}>{displayName(uid)}</Text>
-                {isOwner && (
-                  <Pressable onPress={() => handleRemoveMember(uid)} style={styles.removeBtn}>
+            {group.memberIds.map((memberUid) => (
+              <View key={memberUid} style={styles.memberRow}>
+                <Text style={styles.memberName}>{displayName(memberUid)}</Text>
+                {isOwner && memberUid !== group.ownerId ? (
+                  <Pressable onPress={() => handleRemoveMember(memberUid)} style={styles.removeBtn}>
                     <Text style={styles.removeBtnText}>Çıkar</Text>
                   </Pressable>
-                )}
+                ) : null}
+              </View>
+            ))}
+            {pendingInvites.map((inv) => (
+              <View key={inv.id} style={styles.memberRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.memberName}>{displayName(inv.toUid)}</Text>
+                  <Text style={styles.pendingSub}>Onay bekleniyor</Text>
+                </View>
               </View>
             ))}
           </View>
@@ -206,21 +223,24 @@ export function GroupDetailScreen(props: {
       >
         <Pressable style={styles.modalOverlay} onPress={() => setAddMemberModal(false)}>
           <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.modalTitle}>Üye ekle</Text>
-            <Text style={styles.muted}>Sadece arkadaş listenizdeki kişileri ekleyebilirsiniz.</Text>
+            <Text style={styles.modalTitle}>Üye davet et</Text>
+            <Text style={styles.muted}>
+              Yalnızca karşılıklı onaylı arkadaşların davet alır; kabul edene kadar grupta onay bekleniyor
+              görünür.
+            </Text>
             <View style={{ height: appTheme.space.sm }} />
             {friendsNotInGroup.length === 0 ? (
-              <Text style={styles.muted}>Eklenebilir arkadaş yok.</Text>
+              <Text style={styles.muted}>Davet gönderebileceğin onaylı arkadaş yok veya hepsi zaten üye.</Text>
             ) : (
               <ScrollView style={styles.modalList}>
-                {friendsNotInGroup.slice(0, 30).map((uid) => (
+                {friendsNotInGroup.slice(0, 30).map((friendUid) => (
                   <Pressable
-                    key={uid}
-                    onPress={() => handleAddMember(uid)}
+                    key={friendUid}
+                    onPress={() => handleInviteMember(friendUid)}
                     style={styles.friendRow}
                   >
-                    <Text style={styles.friendName}>{displayName(uid)}</Text>
-                    <Text style={styles.friendAdd}>Ekle</Text>
+                    <Text style={styles.friendName}>{displayName(friendUid)}</Text>
+                    <Text style={styles.friendAdd}>Davet gönder</Text>
                   </Pressable>
                 ))}
               </ScrollView>
@@ -264,6 +284,7 @@ function createGroupDetailStyles(t: AppTheme) {
       borderBottomColor: t.color.subtle,
     },
     memberName: { color: t.color.text, fontSize: t.font.body },
+    pendingSub: { color: t.color.muted, fontSize: t.font.small, marginTop: 2 },
     removeBtn: { paddingVertical: 4, paddingHorizontal: 8 },
     removeBtnText: { color: t.color.danger, fontSize: t.font.small, fontWeight: '700' },
     modalOverlay: {

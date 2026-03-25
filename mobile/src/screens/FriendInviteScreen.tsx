@@ -4,13 +4,24 @@ import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from '
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
 import { auth } from '../lib/firebase';
-import { addFriendBothWays, getDevicePhoneNumbersE164, matchUsersByPhoneNumbers, MatchedUser } from '../services/friends';
+import {
+  acceptFriendRequest,
+  getDevicePhoneNumbersE164,
+  listIncomingFriendRequests,
+  listOutgoingFriendRequestTargetUids,
+  matchUsersByPhoneNumbers,
+  MatchedUser,
+  sendFriendRequest,
+} from '../services/friends';
 import { getUserProfile } from '../services/userProfile';
 import { useAppTheme } from '../ThemeContext';
 import type { AppTheme } from '../theme';
+import { firestorePermissionUserMessage, isFirestorePermissionDenied } from '../utils/firestoreErrors';
 import { maskPhone } from '../utils/phone';
 
-type Row = MatchedUser & { status: 'add' | 'added' | 'self' };
+type RowStatus = 'friend' | 'pending_out' | 'pending_in' | 'add';
+
+type Row = MatchedUser & { status: RowStatus };
 
 export function FriendInviteScreen(props: { onDone: () => void }) {
   const appTheme = useAppTheme();
@@ -37,20 +48,52 @@ export function FriendInviteScreen(props: { onDone: () => void }) {
 
       if (!currentUid) throw new Error('Oturum bulunamadı.');
 
-      const [me, nums] = await Promise.all([getUserProfile(currentUid), getDevicePhoneNumbersE164()]);
-      const myFriends = new Set((me?.friends || []) as string[]);
+      const [me, nums, outgoingPending] = await Promise.all([
+        getUserProfile(currentUid),
+        getDevicePhoneNumbersE164(),
+        listOutgoingFriendRequestTargetUids(currentUid),
+      ]);
+      const myFriendIds = new Set((me?.friends || []) as string[]);
       const matched = await matchUsersByPhoneNumbers(nums);
 
-      const mapped: Row[] = matched.map((u) => ({
-        ...u,
-        status: u.uid === currentUid ? 'self' : myFriends.has(u.uid) ? 'added' : 'add',
-      }));
+      const profiles = new Map<string, Awaited<ReturnType<typeof getUserProfile>>>();
+      await Promise.all(
+        matched.map(async (u) => {
+          const p = await getUserProfile(u.uid);
+          if (p) profiles.set(u.uid, p);
+        })
+      );
 
-      const filtered = mapped.filter((r) => r.status !== 'self');
-      filtered.sort((a, b) => (a.status === b.status ? 0 : a.status === 'added' ? 1 : -1));
-      setRows(filtered);
+      const mapped: Row[] = matched
+        .filter((u) => u.uid !== currentUid)
+        .map((u) => {
+          const theirFriends = profiles.get(u.uid)?.friends ?? [];
+          const mutual = myFriendIds.has(u.uid) && theirFriends.includes(currentUid);
+          if (mutual) return { ...u, status: 'friend' as const };
+          if (outgoingPending.has(u.uid)) return { ...u, status: 'pending_out' as const };
+          return { ...u, status: 'add' as const };
+        });
+
+      const incoming = await listIncomingFriendRequests(currentUid);
+      const incomingFrom = new Set(incoming.map((r) => r.fromUid));
+
+      const withIncoming: Row[] = mapped.map((r) => {
+        if (r.status !== 'add' && r.status !== 'pending_out') return r;
+        if (incomingFrom.has(r.uid)) return { ...r, status: 'pending_in' };
+        return r;
+      });
+
+      withIncoming.sort((a, b) => {
+        const rank = (s: RowStatus) =>
+          s === 'pending_in' ? 0 : s === 'add' ? 1 : s === 'pending_out' ? 2 : 3;
+        const d = rank(a.status) - rank(b.status);
+        return d !== 0 ? d : (a.displayName || '').localeCompare(b.displayName || '');
+      });
+      setRows(withIncoming);
     } catch (e: any) {
-      setError(e?.message || 'Rehber eşleştirme başarısız.');
+      setError(
+        isFirestorePermissionDenied(e) ? firestorePermissionUserMessage() : e?.message || 'Rehber eşleştirme başarısız.'
+      );
       setRows([]);
     } finally {
       setLoading(false);
@@ -67,15 +110,33 @@ export function FriendInviteScreen(props: { onDone: () => void }) {
     await refresh();
   }
 
-  async function addFriend(uid: string) {
+  async function sendRequest(uid: string) {
     if (!currentUid) return;
     setBusyUid(uid);
     setError(null);
     try {
-      await addFriendBothWays({ currentUid, friendUid: uid });
-      setRows((prev) => prev.map((r) => (r.uid === uid ? { ...r, status: 'added' } : r)));
+      await sendFriendRequest({ fromUid: currentUid, toUid: uid });
+      setRows((prev) => prev.map((r) => (r.uid === uid ? { ...r, status: 'pending_out' } : r)));
     } catch (e: any) {
-      setError(e?.message || 'Arkadaş eklenemedi.');
+      setError(
+        isFirestorePermissionDenied(e) ? firestorePermissionUserMessage() : e?.message || 'İstek gönderilemedi.'
+      );
+    } finally {
+      setBusyUid(null);
+    }
+  }
+
+  async function acceptIncoming(uid: string) {
+    if (!currentUid) return;
+    setBusyUid(uid);
+    setError(null);
+    try {
+      await acceptFriendRequest({ fromUid: uid, toUid: currentUid });
+      setRows((prev) => prev.map((r) => (r.uid === uid ? { ...r, status: 'friend' } : r)));
+    } catch (e: any) {
+      setError(
+        isFirestorePermissionDenied(e) ? firestorePermissionUserMessage() : e?.message || 'Onaylanamadı.'
+      );
     } finally {
       setBusyUid(null);
     }
@@ -126,13 +187,29 @@ export function FriendInviteScreen(props: { onDone: () => void }) {
                       <Text style={styles.name}>{item.displayName?.trim() || 'RouteWise Kullanıcısı'}</Text>
                       <Text style={styles.phone}>{maskPhone(item.phoneNumber)}</Text>
                     </View>
-                    {item.status === 'added' ? (
+                    {item.status === 'friend' ? (
                       <View style={styles.addedPill}>
-                        <Text style={styles.addedText}>Eklendi</Text>
+                        <Text style={styles.addedText}>Arkadaşsınız</Text>
                       </View>
+                    ) : item.status === 'pending_out' ? (
+                      <View style={styles.pendingPill}>
+                        <Text style={styles.pendingText}>Onay bekleniyor</Text>
+                      </View>
+                    ) : item.status === 'pending_in' ? (
+                      <Pressable
+                        onPress={() => acceptIncoming(item.uid)}
+                        disabled={busyUid === item.uid}
+                        style={({ pressed }) => [
+                          styles.acceptBtn,
+                          pressed ? { opacity: 0.9 } : null,
+                          busyUid === item.uid ? { opacity: 0.55 } : null,
+                        ]}
+                      >
+                        <Text style={styles.acceptBtnText}>{busyUid === item.uid ? '...' : 'Onayla'}</Text>
+                      </Pressable>
                     ) : (
                       <Pressable
-                        onPress={() => addFriend(item.uid)}
+                        onPress={() => sendRequest(item.uid)}
                         disabled={busyUid === item.uid}
                         style={({ pressed }) => [
                           styles.addBtn,
@@ -140,7 +217,7 @@ export function FriendInviteScreen(props: { onDone: () => void }) {
                           busyUid === item.uid ? { opacity: 0.55 } : null,
                         ]}
                       >
-                        <Text style={styles.addBtnText}>{busyUid === item.uid ? '...' : 'Ekle'}</Text>
+                        <Text style={styles.addBtnText}>{busyUid === item.uid ? '...' : 'İstek gönder'}</Text>
                       </Pressable>
                     )}
                   </View>
@@ -226,6 +303,13 @@ function createFriendInviteStyles(t: AppTheme) {
       borderRadius: t.radius.pill,
     },
     addBtnText: { color: t.color.text, fontWeight: '800', fontSize: t.font.small },
+    acceptBtn: {
+      backgroundColor: t.color.primary,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: t.radius.pill,
+    },
+    acceptBtnText: { color: '#fff', fontWeight: '800', fontSize: t.font.small },
     addedPill: {
       backgroundColor: 'rgba(74,222,128,0.18)',
       borderWidth: 1,
@@ -235,9 +319,17 @@ function createFriendInviteStyles(t: AppTheme) {
       borderRadius: t.radius.pill,
     },
     addedText: { color: t.color.text, fontWeight: '800', fontSize: t.font.small },
+    pendingPill: {
+      backgroundColor: t.color.inputBg,
+      borderWidth: 1,
+      borderColor: t.color.border,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: t.radius.pill,
+    },
+    pendingText: { color: t.color.muted, fontWeight: '800', fontSize: t.font.small },
     sep: { height: 1, backgroundColor: t.color.subtle, marginLeft: 14 },
     bottom: { paddingTop: t.space.md },
     refresh: { color: t.color.muted, fontSize: t.font.small, textAlign: 'center', textDecorationLine: 'underline' },
   });
 }
-

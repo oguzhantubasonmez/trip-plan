@@ -18,7 +18,7 @@ import { GroupDetailScreen } from './src/screens/GroupDetailScreen';
 import { GroupsScreen } from './src/screens/GroupsScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { JoinInviteScreen } from './src/screens/JoinInviteScreen';
-import { PhoneLoginScreen } from './src/screens/PhoneLoginScreen';
+import { AuthScreen } from './src/screens/AuthScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
 import { EditTripScreen } from './src/screens/EditTripScreen';
 import { TripDetailScreen } from './src/screens/TripDetailScreen';
@@ -88,10 +88,11 @@ function AppInner() {
     };
   }, []);
 
+  /** İlk kurulum: rehber tanıtımı → (isteğe bağlı) arkadaş ekranı; sonraki her açılışta doğrudan ana sayfa. */
   const initialSignedInRoute = useMemo(() => {
     if (initialInviteTripId) return 'JoinInvite' as const;
     if (contactsOnboardingSeen === false) return 'ContactsOnboarding' as const;
-    return 'FriendInvite' as const;
+    return 'Home' as const;
   }, [contactsOnboardingSeen]);
 
   if (booting || contactsOnboardingSeen === null) {
@@ -111,12 +112,12 @@ function AppInner() {
       <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
       <Stack.Navigator
         screenOptions={{ headerShown: false, animation: 'fade' }}
-        initialRouteName={user ? initialSignedInRoute : 'PhoneLogin'}
+        initialRouteName={user ? initialSignedInRoute : 'Auth'}
       >
         {!user ? (
           <>
-            <Stack.Screen name="PhoneLogin">
-              {() => <PhoneLoginScreen />}
+            <Stack.Screen name="Auth">
+              {() => <AuthScreen />}
             </Stack.Screen>
           </>
         ) : (

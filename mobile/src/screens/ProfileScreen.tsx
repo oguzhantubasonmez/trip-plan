@@ -1,5 +1,6 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useMemo, useState } from 'react';
+import { signOut } from 'firebase/auth';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
@@ -9,16 +10,21 @@ import type { ExpenseType } from '../services/userProfile';
 import { getUserProfile, updateUserProfile } from '../services/userProfile';
 import { useAppTheme, useThemeMode } from '../ThemeContext';
 import type { AppTheme } from '../theme';
+import { nationalDigitsAfterTrCountry, normalizeE164 } from '../utils/phone';
 
 export function ProfileScreen(props: { onBack: () => void; onOpenFriends: () => void }) {
   const theme = useAppTheme();
   const { mode, setMode } = useThemeMode();
   const styles = useMemo(() => createProfileStyles(theme), [theme]);
   const uid = auth.currentUser?.uid;
+  const authEmail = auth.currentUser?.email ?? '';
+  const [countryCode] = useState('+90');
   const [displayName, setDisplayName] = useState('');
+  const [phoneNational, setPhoneNational] = useState('');
   const [carConsumption, setCarConsumption] = useState('');
   const [loading, setLoading] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [expenseTypes, setExpenseTypes] = useState<ExpenseType[]>([]);
   const [newExpenseName, setNewExpenseName] = useState('');
   const [typesBusy, setTypesBusy] = useState(false);
@@ -39,16 +45,38 @@ export function ProfileScreen(props: { onBack: () => void; onOpenFriends: () => 
 
   async function save() {
     if (!uid) return;
+    setSaveError(null);
     setLoading(true);
     setSaved(false);
     try {
+      const rawPhone = phoneNational.trim();
+      let phoneNumber: string;
+      if (!rawPhone) {
+        phoneNumber = '';
+      } else {
+        const e164 = normalizeE164(`${countryCode}${rawPhone}`);
+        if (!e164) {
+          setSaveError('Geçerli bir telefon numarası gir.');
+          return;
+        }
+        phoneNumber = e164;
+      }
       await updateUserProfile(uid, {
         displayName: displayName.trim() || undefined,
         carConsumption: carConsumption.trim() || undefined,
+        phoneNumber,
       });
       setSaved(true);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleSignOut() {
+    try {
+      await signOut(auth);
+    } catch {
+      /* ignore */
     }
   }
 
@@ -93,12 +121,33 @@ export function ProfileScreen(props: { onBack: () => void; onOpenFriends: () => 
       </View>
 
       <View style={styles.card}>
+        <Text style={styles.fieldLabel}>E-posta</Text>
+        <Text style={styles.emailReadonly}>{authEmail || '—'}</Text>
+        <Text style={styles.emailHint}>Giriş adresin; buradan değiştirilemez.</Text>
+        <View style={{ height: theme.space.md }} />
         <TextField
           label="Ad / takma ad"
           value={displayName}
           placeholder="İsteğe bağlı"
           onChangeText={setDisplayName}
         />
+        <View style={{ height: theme.space.md }} />
+        <View style={styles.phoneRow}>
+          <View style={styles.phoneCc}>
+            <Text style={styles.phoneCcText}>{countryCode}</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <TextField
+              label="Telefon numarası"
+              value={phoneNational}
+              placeholder="5xx xxx xx xx"
+              keyboardType="phone-pad"
+              onChangeText={setPhoneNational}
+              helperText="Rehberden arkadaş eşleştirmesi için. Boş bırakırsan eşleşme olmaz."
+              maxLength={15}
+            />
+          </View>
+        </View>
         <View style={{ height: theme.space.sm }} />
         <TextField
           label="Araç tüketimi (L/100 km)"
@@ -173,6 +222,11 @@ export function ProfileScreen(props: { onBack: () => void; onOpenFriends: () => 
         <Text style={styles.extraBtnText}>Arkadaşlarım ve gruplar</Text>
         <Text style={styles.extraBtnSub}>Liste, rehberden ekleme, gruplar</Text>
       </Pressable>
+
+      <View style={{ height: theme.space.lg }} />
+      <Pressable onPress={handleSignOut} style={styles.signOutBtn}>
+        <Text style={styles.signOutText}>Çıkış yap</Text>
+      </Pressable>
       </ScrollView>
     </Screen>
   );
@@ -204,6 +258,30 @@ function createProfileStyles(theme: AppTheme) {
       borderWidth: 1,
       borderColor: theme.color.cardBorderPrimary,
       ...theme.shadowCard,
+    },
+    fieldLabel: {
+      color: theme.color.textSecondary,
+      fontSize: theme.font.small,
+      fontWeight: '700',
+      marginBottom: 6,
+    },
+    emailReadonly: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '700' },
+    emailHint: { color: theme.color.muted, fontSize: theme.font.tiny, marginTop: 4, lineHeight: 18 },
+    phoneRow: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
+    phoneCc: {
+      backgroundColor: theme.color.inputBg,
+      borderWidth: 1,
+      borderColor: theme.color.border,
+      paddingHorizontal: 12,
+      paddingVertical: 14,
+      borderRadius: theme.radius.md,
+    },
+    phoneCcText: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '700' },
+    saveError: {
+      color: theme.color.danger,
+      fontSize: theme.font.small,
+      fontWeight: '700',
+      marginTop: theme.space.sm,
     },
     blockTitle: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '800', marginBottom: 6 },
     blockSub: { color: theme.color.muted, fontSize: theme.font.small, lineHeight: 20 },
@@ -243,6 +321,12 @@ function createProfileStyles(theme: AppTheme) {
     },
     extraBtnText: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '700' },
     extraBtnSub: { color: theme.color.muted, fontSize: theme.font.small, marginTop: 4 },
+    signOutBtn: {
+      alignSelf: 'center',
+      paddingVertical: 12,
+      paddingHorizontal: theme.space.lg,
+    },
+    signOutText: { color: theme.color.danger, fontSize: theme.font.body, fontWeight: '800' },
     versionLine: {
       marginTop: theme.space.xl,
       textAlign: 'center',

@@ -1,5 +1,5 @@
 export type RootStackParamList = {
-  PhoneLogin: undefined;
+  Auth: undefined;
   ContactsOnboarding: undefined;
   FriendInvite: undefined;
   Home: undefined;

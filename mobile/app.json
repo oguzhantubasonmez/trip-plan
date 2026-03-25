@@ -1,15 +1,15 @@
 {
   "expo": {
-    "name": "mobile",
+    "name": "RouteWise",
     "slug": "mobile",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/logo.png",
     "userInterfaceStyle": "automatic",
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/logo.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#0B1220"
     },
     "ios": {
       "supportsTablet": true
@@ -17,15 +17,13 @@
     "android": {
       "package": "com.routewise.tripplan",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#0B1220",
+        "foregroundImage": "./assets/logo.png"
       },
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/logo.png"
     },
     "plugins": [
       "@react-native-community/datetimepicker"

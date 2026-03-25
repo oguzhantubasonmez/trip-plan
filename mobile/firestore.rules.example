@@ -1,28 +1,64 @@
-// Örnek Firestore kuralları. Firebase Console > Firestore > Rules bölümüne uyarlayıp yapıştırabilirsin.
-// Rotalar ve duraklar: giriş yapmış kullanıcı kendi oluşturduğu veya katılımcı olduğu rotalara erişebilir.
+// =============================================================================
+// Firestore kuralları — Firebase Console > Firestore > Kurallar > Yapıştır + Yayınla
+// =============================================================================
+//
+// İstek gönderirken "permission denied" ama listede kullanıcı görünüyorsa:
+// - users okuması çalışıyor, friendRequests YAZMASI (create/update/delete) engelleniyor demektir.
+// - Konsolda mutlaka aşağıdaki `match /friendRequests/...` bloğu olmalı; adı `friendRequest` (tekil)
+//   veya farklı yazılırsa yazma reddedilir.
+//
+// Not: setDoc() bazen mevcut belgeyi değiştirdiğinde kurallarda "update" olarak değerlendirilir;
+// bu yüzden friendRequests için yalnızca create açık bırakılmış sıkı kurallar bazen başarısız olur.
+//
+// =============================================================================
 
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if signedIn();
     }
+
     match /trips/{tripId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update, delete: if request.auth != null;
+      allow read, write: if signedIn();
+
+      match /comments/{commentId} {
+        allow read, write: if signedIn();
+      }
     }
+
     match /stops/{stopId} {
-      allow read, write: if request.auth != null;
+      allow read, write: if signedIn();
     }
+
     match /comments/{commentId} {
-      allow read, write: if request.auth != null;
+      allow read, write: if signedIn();
     }
+
     match /groups/{groupId} {
-      allow read, write: if request.auth != null;
+      allow read, write: if signedIn();
     }
-    match /tripProposals/{id} {
-      allow read, write: if request.auth != null;
+
+    // Uygulama kodu: collection(db, 'friendRequests')
+    match /friendRequests/{requestId} {
+      allow read: if signedIn();
+      // İstek oluşturan gerçekten giriş yapmış kullanıcı olmalı
+      allow create: if signedIn() && request.resource.data.fromUid == request.auth.uid;
+      // Silme + karşılıklı onay akışı; setDoc ile üzerine yazma = update sayılabilir
+      allow update, delete: if signedIn();
+    }
+
+    match /groupInvites/{inviteId} {
+      allow read, write: if signedIn();
+    }
+
+    match /tripProposals/{proposalId} {
+      allow read, write: if signedIn();
     }
   }
 }

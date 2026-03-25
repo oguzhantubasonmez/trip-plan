@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Contacts from 'expo-contacts';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
@@ -13,11 +13,35 @@ export function ContactsOnboardingScreen(props: { onDone: () => void }) {
   const appTheme = useAppTheme();
   const styles = useMemo(() => createContactsOnboardingStyles(appTheme), [appTheme]);
   const [loading, setLoading] = useState(false);
+  const autoAdvanced = useRef(false);
 
   async function finishAndContinue() {
     await AsyncStorage.setItem(CONTACTS_ONBOARDING_SEEN_KEY, '1');
     props.onDone();
   }
+
+  const onDoneRef = useRef(props.onDone);
+  onDoneRef.current = props.onDone;
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const perm = await Contacts.getPermissionsAsync();
+        if (!alive || autoAdvanced.current) return;
+        if (perm.status === 'granted') {
+          autoAdvanced.current = true;
+          await AsyncStorage.setItem(CONTACTS_ONBOARDING_SEEN_KEY, '1');
+          if (alive) onDoneRef.current();
+        }
+      } catch {
+        /* kullanıcı yine de manuel akışı görür */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   async function requestPermission() {
     setLoading(true);

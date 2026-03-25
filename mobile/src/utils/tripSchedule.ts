@@ -2,6 +2,36 @@
  * Rota tarihleri (YYYY-MM-DD) + opsiyonel plan saatleri (HH:mm) — yerel takvim, UTC kayması yok.
  */
 
+/** Durakta gün yoksa rota başlangıç tarihi; o da yoksa sıralamada sabit taban. */
+export function effectiveStopYmd(
+  stop: { stopDate?: string | null },
+  tripStartDate?: string | null
+): string {
+  const raw = typeof stop.stopDate === 'string' ? stop.stopDate.trim() : '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const t = typeof tripStartDate === 'string' ? tripStartDate.trim() : '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  return '1970-01-01';
+}
+
+export function sortStopsByRoute<
+  T extends {
+    stopDate?: string | null;
+    order?: number;
+    createdAt?: { toMillis?: () => number };
+  },
+>(stops: T[], tripStartDate: string): T[] {
+  return [...stops].sort((a, b) => {
+    const da = effectiveStopYmd(a, tripStartDate);
+    const db = effectiveStopYmd(b, tripStartDate);
+    if (da !== db) return da.localeCompare(db);
+    const oa = a.order ?? 0;
+    const ob = b.order ?? 0;
+    if (oa !== ob) return oa - ob;
+    return (a.createdAt?.toMillis?.() ?? 0) - (b.createdAt?.toMillis?.() ?? 0);
+  });
+}
+
 /** "2025-03-17" → yerel gece yarısı */
 export function parseTripYmd(iso: string | undefined | null): Date | null {
   if (!iso || typeof iso !== 'string') return null;
@@ -71,4 +101,13 @@ export function formatTripScheduleSummary(
   }
 
   return { dateLine, timeLine, combinedLine };
+}
+
+/** Duraklar arası toplam sürüş süresi (dk) — kısa gösterim. */
+export function formatDrivingDurationMinutes(totalMin: number): string {
+  if (totalMin <= 0) return '';
+  if (totalMin < 60) return `~${totalMin} dk`;
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return m > 0 ? `~${h} sa ${m} dk` : `~${h} sa`;
 }
