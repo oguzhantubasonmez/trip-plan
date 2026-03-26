@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -19,6 +20,7 @@ import {
   listIncomingFriendRequests,
   listOutgoingFriendRequestTargetUids,
   removeFriendBothWays,
+  removeFriendFromMyListOnly,
   type FriendRequest,
 } from '../services/friends';
 import {
@@ -28,6 +30,7 @@ import {
   listPendingGroupInvitesForUser,
   type GroupInvite,
 } from '../services/groups';
+import { markFriendsHubVisited } from '../services/activityInbox';
 import { getUserProfile } from '../services/userProfile';
 import type { UserProfile } from '../services/userProfile';
 import { useAppTheme } from '../ThemeContext';
@@ -99,6 +102,7 @@ export function FriendsHubScreen(props: {
         })
       );
       setGroupNames(gMap);
+      void markFriendsHubVisited(uid);
     } catch (_) {
       setFriendUids([]);
       setOutgoingPendingUids([]);
@@ -123,17 +127,51 @@ export function FriendsHubScreen(props: {
     [profiles]
   );
 
+  /** Profil yüklendiyse ve karşı taraf seni listede tutmuyorsa tek yönlü / bozuk kayıt — listede gösterme. */
+  const verifiedFriendIds = useMemo(() => {
+    if (!uid) return [];
+    return friendUids.filter((id) => {
+      const p = profiles.get(id);
+      if (!p) return true;
+      return Array.isArray(p.friends) && p.friends.includes(uid);
+    });
+  }, [friendUids, profiles, uid]);
+
+  /** Profili geldi; seni karşı listede görmüyor — tek yönlü veya eski bozuk kayıt. */
+  const orphanFriendIds = useMemo(() => {
+    if (!uid) return [];
+    return friendUids.filter((id) => {
+      const p = profiles.get(id);
+      if (!p) return false;
+      return !p.friends?.includes(uid);
+    });
+  }, [friendUids, profiles, uid]);
+
   const sortedFriendIds = useMemo(() => {
-    return [...friendUids].sort((a, b) =>
+    return [...verifiedFriendIds].sort((a, b) =>
       displayName(a).localeCompare(displayName(b), 'tr', { sensitivity: 'base' })
     );
-  }, [friendUids, displayName]);
+  }, [verifiedFriendIds, displayName]);
 
   const sortedOutgoingPendingIds = useMemo(() => {
     return [...outgoingPendingUids].sort((a, b) =>
       displayName(a).localeCompare(displayName(b), 'tr', { sensitivity: 'base' })
     );
   }, [outgoingPendingUids, displayName]);
+
+  /** Karşılıklı arkadaş olduysan ama eski istek belgesi kaldıysa gelen kutusunda gösterme. */
+  const visibleIncomingFriends = useMemo(() => {
+    if (!uid) return [];
+    return incomingFriends.filter((r) => {
+      const p = profiles.get(r.fromUid);
+      const mutual =
+        friendUids.includes(r.fromUid) &&
+        p != null &&
+        Array.isArray(p.friends) &&
+        p.friends.includes(uid);
+      return !mutual;
+    });
+  }, [incomingFriends, friendUids, profiles, uid]);
 
   function subtitleForProfile(p: UserProfile | undefined): string | null {
     if (!p?.phoneNumber) return null;
@@ -147,7 +185,8 @@ export function FriendsHubScreen(props: {
     try {
       await acceptFriendRequest({ fromUid, toUid: uid });
       await load();
-    } catch {
+    } catch (e: any) {
+      Alert.alert('Arkadaşlık isteği', e?.message || 'Onaylanamadı. İnternet veya Firestore izinlerini kontrol et.');
       await load();
     } finally {
       setBusyKey(null);
@@ -196,31 +235,81 @@ export function FriendsHubScreen(props: {
     }
   }
 
+  async function runRemoveFriendBothWays(friendUid: string) {
+    if (!uid) return;
+    setRemovingUid(friendUid);
+    try {
+      await removeFriendBothWays({ currentUid: uid, friendUid });
+      await load();
+    } catch (e: any) {
+      const msg = e?.message || 'İşlem tamamlanamadı. İnternet veya Firestore izinlerini kontrol et.';
+      if (Platform.OS === 'web') {
+        window.alert(msg);
+      } else {
+        Alert.alert('Arkadaşlık', msg);
+      }
+      await load();
+    } finally {
+      setRemovingUid(null);
+    }
+  }
+
   function confirmRemoveFriend(friendUid: string) {
     if (!uid) return;
     const name = displayName(friendUid);
-    Alert.alert(
-      'Arkadaşlıktan çıkar',
-      `“${name}” arkadaş listenden kaldırılacak. Karşı tarafta da listen güncellenir. Emin misin?`,
-      [
-        { text: 'Vazgeç', style: 'cancel' },
-        {
-          text: 'Çıkar',
-          style: 'destructive',
-          onPress: async () => {
-            setRemovingUid(friendUid);
-            try {
-              await removeFriendBothWays({ currentUid: uid, friendUid });
-              await load();
-            } catch {
-              await load();
-            } finally {
-              setRemovingUid(null);
-            }
-          },
-        },
-      ]
-    );
+    const title = 'Arkadaşlıktan çıkar';
+    const message = `“${name}” arkadaş listenden kaldırılacak. Karşı tarafta da listen güncellenir. Emin misin?`;
+    if (Platform.OS === 'web') {
+      if (typeof globalThis.confirm === 'function') {
+        if (globalThis.confirm(`${title}\n\n${message}`)) void runRemoveFriendBothWays(friendUid);
+      } else {
+        void runRemoveFriendBothWays(friendUid);
+      }
+      return;
+    }
+    Alert.alert(title, message, [
+      { text: 'Vazgeç', style: 'cancel' },
+      { text: 'Çıkar', style: 'destructive', onPress: () => void runRemoveFriendBothWays(friendUid) },
+    ]);
+  }
+
+  async function runRemoveOrphanFromMyList(orphanUid: string) {
+    if (!uid) return;
+    setRemovingUid(orphanUid);
+    try {
+      await removeFriendFromMyListOnly({ currentUid: uid, friendUid: orphanUid });
+      await load();
+    } catch (e: any) {
+      const msg = e?.message || 'Kayıt kaldırılamadı. İnternet veya Firestore izinlerini kontrol et.';
+      if (Platform.OS === 'web') {
+        window.alert(msg);
+      } else {
+        Alert.alert('Arkadaş listesi', msg);
+      }
+      await load();
+    } finally {
+      setRemovingUid(null);
+    }
+  }
+
+  /** Tek yönlü kayıt: yalnızca kendi listeni günceller; web’de Alert yerine confirm kullanılır. */
+  function confirmRemoveOrphanFriend(orphanUid: string) {
+    if (!uid) return;
+    const name = displayName(orphanUid);
+    const title = 'Tek yönlü kaydı kaldır';
+    const message = `“${name}” yalnızca senin listenden çıkarılır.`;
+    if (Platform.OS === 'web') {
+      if (typeof globalThis.confirm === 'function') {
+        if (globalThis.confirm(`${title}\n\n${message}`)) void runRemoveOrphanFromMyList(orphanUid);
+      } else {
+        void runRemoveOrphanFromMyList(orphanUid);
+      }
+      return;
+    }
+    Alert.alert(title, message, [
+      { text: 'Vazgeç', style: 'cancel' },
+      { text: 'Kaldır', style: 'destructive', onPress: () => void runRemoveOrphanFromMyList(orphanUid) },
+    ]);
   }
 
   function confirmCancelOutgoing(toUid: string) {
@@ -253,6 +342,7 @@ export function FriendsHubScreen(props: {
   return (
     <Screen>
       <ScrollView
+        style={{ flex: 1, minHeight: 0 }}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
@@ -268,7 +358,7 @@ export function FriendsHubScreen(props: {
           </Text>
         </View>
 
-        <PrimaryButton title="📱 Rehberden arkadaş ekle" onPress={props.onOpenContactInvite} />
+        <PrimaryButton title="➕ Arkadaş ekle" onPress={props.onOpenContactInvite} />
         <View style={{ height: appTheme.space.sm }} />
         <Pressable onPress={props.onOpenGroups} style={styles.secondaryBtn}>
           <Text style={styles.secondaryBtnText}>Arkadaş gruplarım</Text>
@@ -283,12 +373,12 @@ export function FriendsHubScreen(props: {
           </View>
         ) : (
           <>
-            {incomingFriends.length > 0 ? (
+            {visibleIncomingFriends.length > 0 ? (
               <View style={styles.section}>
                 <View style={styles.sectionTitleWrap}>
                   <Text style={styles.sectionTitle}>Gelen arkadaşlık istekleri</Text>
                 </View>
-                {incomingFriends.map((r) => {
+                {visibleIncomingFriends.map((r) => {
                   const p = profiles.get(r.fromUid);
                   const sub = subtitleForProfile(p);
                   return (
@@ -435,7 +525,7 @@ export function FriendsHubScreen(props: {
               >
                 <Text style={styles.sectionTitle}>Onaylı arkadaşlar</Text>
                 <View style={styles.countPill}>
-                  <Text style={styles.countPillText}>{friendUids.length}</Text>
+                  <Text style={styles.countPillText}>{verifiedFriendIds.length}</Text>
                 </View>
               </View>
 
@@ -443,7 +533,7 @@ export function FriendsHubScreen(props: {
                 <Text style={styles.emptyFriends}>
                   {sortedOutgoingPendingIds.length > 0
                     ? 'Henüz onaylı arkadaş yok. Yukarıdaki kişiler onaylayınca buraya taşınır.'
-                    : 'Henüz onaylı arkadaş yok. Yukarıdan rehberden istek gönderebilirsin; karşı taraf onaylayınca burada görünür.'}
+                    : 'Henüz onaylı arkadaş yok. Yukarıdan arkadaş ekleyerek (e-posta, ad veya rehber) istek gönderebilirsin; karşı taraf onaylayınca burada görünür.'}
                 </Text>
               ) : (
                 <View style={styles.friendsList}>
@@ -488,6 +578,58 @@ export function FriendsHubScreen(props: {
                   })}
                 </View>
               )}
+
+              {orphanFriendIds.length > 0 ? (
+                <>
+                  <View style={[styles.friendsSectionHeader, { paddingTop: appTheme.space.lg }]}>
+                    <Text style={styles.sectionTitle}>Tek yönlü kayıt</Text>
+                    <View style={styles.countPill}>
+                      <Text style={styles.countPillText}>{orphanFriendIds.length}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.pendingSectionHint}>
+                    Listende görünüyorlar; karşı profilde karşılık yok (eski hata veya manuel veri). «Kaldır» kendi
+                    kaydını temizler.
+                  </Text>
+                  <View style={styles.friendsList}>
+                    {orphanFriendIds.map((oid, index) => {
+                      const isLast = index === orphanFriendIds.length - 1;
+                      return (
+                        <View
+                          key={`orphan-${oid}`}
+                          style={[styles.friendCard, !isLast ? styles.friendCardSep : null]}
+                        >
+                          <View style={[styles.avatarLg, styles.avatarPending]}>
+                            <Text style={styles.avatarLgText}>{initialFromName(displayName(oid))}</Text>
+                          </View>
+                          <View style={styles.friendCardBody}>
+                            <Text style={styles.friendCardName} numberOfLines={1}>
+                              {displayName(oid)}
+                            </Text>
+                            <Text style={styles.friendCardPhone} numberOfLines={2}>
+                              Karşılıklı arkadaşlık yok
+                            </Text>
+                          </View>
+                          <Pressable
+                            onPress={() => confirmRemoveOrphanFriend(oid)}
+                            disabled={removingUid !== null}
+                            style={({ pressed }) => [
+                              styles.removeFriendBtn,
+                              pressed ? { opacity: 0.85 } : null,
+                              removingUid === oid ? { opacity: 0.5 } : null,
+                            ]}
+                            hitSlop={8}
+                          >
+                            <Text style={styles.removeFriendBtnText}>
+                              {removingUid === oid ? '…' : 'Kaldır'}
+                            </Text>
+                          </Pressable>
+                        </View>
+                      );
+                    })}
+                  </View>
+                </>
+              ) : null}
             </View>
           </>
         )}
@@ -498,7 +640,14 @@ export function FriendsHubScreen(props: {
 
 function createFriendsHubStyles(t: AppTheme) {
   return StyleSheet.create({
-    scrollContent: { paddingBottom: t.space.xxl },
+    scrollContent: {
+      paddingBottom: t.space.xxl,
+      flexGrow: 0,
+      /** RN Web: içerik dar kalınca flex:1 gövde 0 genişlik → metin tek harf satırlarına bölünüyor */
+      width: '100%',
+      maxWidth: '100%',
+      alignItems: 'stretch',
+    },
     backRow: { alignSelf: 'flex-start', paddingVertical: 4, paddingRight: 8, marginBottom: t.space.sm },
     backText: { color: t.color.primary, fontSize: t.font.body, fontWeight: '700' },
     header: { gap: 8, marginBottom: t.space.lg },
@@ -523,6 +672,11 @@ function createFriendsHubStyles(t: AppTheme) {
       borderColor: t.color.cardBorderPrimary,
       ...t.shadowCard,
       gap: 0,
+      alignSelf: 'stretch',
+      flexGrow: 0,
+      flexShrink: 0,
+      width: '100%',
+      maxWidth: Platform.OS === 'web' ? 560 : ('100%' as const),
     },
     friendsSection: { paddingHorizontal: 0, paddingBottom: t.space.sm },
     sectionTitle: { color: t.color.text, fontSize: t.font.h2, fontWeight: '800' },
@@ -546,17 +700,39 @@ function createFriendsHubStyles(t: AppTheme) {
     countPillText: { color: t.color.text, fontSize: t.font.small, fontWeight: '800' },
     inboxRow: {
       flexDirection: 'row',
-      alignItems: 'center',
+      alignItems: 'flex-start',
       gap: t.space.sm,
       paddingHorizontal: t.space.lg,
       paddingVertical: t.space.md,
       borderTopWidth: 1,
       borderTopColor: t.color.subtle,
+      width: '100%',
+      maxWidth: '100%',
+      alignSelf: 'stretch',
     },
-    inboxBody: { flex: 1, minWidth: 0 },
-    rowTitle: { color: t.color.text, fontSize: t.font.body, fontWeight: '800' },
+    inboxBody: {
+      flex: 1,
+      flexGrow: 1,
+      flexShrink: 1,
+      flexBasis: 0,
+      minWidth: 0,
+      maxWidth: '100%',
+    },
+    rowTitle: {
+      color: t.color.text,
+      fontSize: t.font.body,
+      fontWeight: '800',
+      flexShrink: 1,
+      maxWidth: '100%',
+    },
     rowSub: { color: t.color.muted, fontSize: t.font.small, marginTop: 2 },
-    requestActions: { flexDirection: 'row', gap: 8, flexShrink: 0 },
+    requestActions: {
+      flexDirection: 'row',
+      gap: 8,
+      flexShrink: 0,
+      flexGrow: 0,
+      marginTop: 2,
+    },
     acceptBtn: {
       backgroundColor: t.color.primary,
       paddingHorizontal: 14,
@@ -573,7 +749,14 @@ function createFriendsHubStyles(t: AppTheme) {
       borderRadius: t.radius.pill,
     },
     declineBtnText: { color: t.color.text, fontWeight: '700', fontSize: t.font.small },
-    mutedSmall: { color: t.color.muted, fontSize: t.font.small, marginTop: 4, lineHeight: 18 },
+    mutedSmall: {
+      color: t.color.muted,
+      fontSize: t.font.small,
+      marginTop: 4,
+      lineHeight: 18,
+      flexShrink: 1,
+      maxWidth: '100%',
+    },
     centered: { paddingVertical: t.space.lg, alignItems: 'center' },
     emptyFriends: {
       color: t.color.muted,
@@ -603,6 +786,8 @@ function createFriendsHubStyles(t: AppTheme) {
       borderColor: t.color.border,
       alignItems: 'center',
       justifyContent: 'center',
+      flexShrink: 0,
+      flexGrow: 0,
     },
     avatarGroup: { backgroundColor: t.color.accentSoft },
     avatarSmText: { color: t.color.text, fontSize: t.font.body, fontWeight: '900' },

@@ -1,10 +1,42 @@
 import { doc, getDoc, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { canonicalizeTrPhoneE164, normalizeE164 } from '../utils/phone';
+import { normalizeNameSearchKey } from '../utils/searchText';
+
+function coerceStoredPhoneE164(raw: string): string {
+  const t = String(raw ?? '').trim();
+  if (!t) return '';
+  return canonicalizeTrPhoneE164(t) || normalizeE164(t) || '';
+}
 
 export type ExpenseType = {
   id: string;
   name: string;
 };
+
+/** Sabit id’ler; durak masrafı ve profil listesi bu kimliklerle hizalanır. */
+export const DEFAULT_EXPENSE_TYPES: ExpenseType[] = [
+  { id: 'et_std_yemek', name: 'Yemek' },
+  { id: 'et_std_icecek', name: 'İçecek' },
+  { id: 'et_std_konaklama', name: 'Konaklama' },
+  { id: 'et_std_diger', name: 'Diğer' },
+];
+
+export const DEFAULT_EXPENSE_TYPE_IDS = new Set(DEFAULT_EXPENSE_TYPES.map((x) => x.id));
+
+/** Firestore’daki listeye standart türleri ekler; sıra: önce dört standart, sonra kullanıcı türleri. */
+export function mergeDefaultExpenseTypes(existing: ExpenseType[]): ExpenseType[] {
+  const byId = new Map<string, ExpenseType>();
+  for (const e of existing) byId.set(e.id, e);
+  for (const d of DEFAULT_EXPENSE_TYPES) {
+    if (!byId.has(d.id)) byId.set(d.id, d);
+  }
+  const out: ExpenseType[] = DEFAULT_EXPENSE_TYPES.map((d) => byId.get(d.id)!);
+  for (const e of existing) {
+    if (!DEFAULT_EXPENSE_TYPE_IDS.has(e.id)) out.push(e);
+  }
+  return out;
+}
 
 function parseExpenseTypes(v: any): ExpenseType[] {
   if (!Array.isArray(v)) return [];
@@ -43,7 +75,7 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
     avatar: v.avatar,
     carConsumption: v.carConsumption,
     friends: v.friends || [],
-    expenseTypes: parseExpenseTypes(v.expenseTypes),
+    expenseTypes: mergeDefaultExpenseTypes(parseExpenseTypes(v.expenseTypes)),
   };
 }
 
@@ -62,12 +94,13 @@ export async function ensureUserDoc(params: {
       ref,
       {
         uid: params.uid,
-        phoneNumber: params.phoneNumber,
+        phoneNumber: coerceStoredPhoneE164(params.phoneNumber),
         email: emailNorm,
         displayName: name,
+        displayNameLower: name ? normalizeNameSearchKey(name) : '',
         avatar: '',
         friends: [],
-        expenseTypes: [],
+        expenseTypes: DEFAULT_EXPENSE_TYPES,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       },
@@ -78,7 +111,10 @@ export async function ensureUserDoc(params: {
       phoneNumber: params.phoneNumber,
       updatedAt: serverTimestamp(),
     };
-    if (name) updates.displayName = name;
+    if (name) {
+      updates.displayName = name;
+      updates.displayNameLower = normalizeNameSearchKey(name);
+    }
     if (emailNorm) updates.email = emailNorm;
     await updateDoc(ref, updates);
   }
@@ -97,9 +133,10 @@ export async function ensureUserDocAfterSignIn(params: { uid: string; email: str
         email: emailNorm,
         phoneNumber: '',
         displayName: '',
+        displayNameLower: '',
         avatar: '',
         friends: [],
-        expenseTypes: [],
+        expenseTypes: DEFAULT_EXPENSE_TYPES,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       },
@@ -122,10 +159,17 @@ export async function updateUserProfile(
 ): Promise<void> {
   const ref = doc(db, 'users', uid);
   const updates: Record<string, any> = { updatedAt: serverTimestamp() };
-  if (data.displayName !== undefined) updates.displayName = data.displayName;
+  if (data.displayName !== undefined) {
+    const t = String(data.displayName).trim();
+    updates.displayName = t;
+    updates.displayNameLower = normalizeNameSearchKey(t);
+  }
   if (data.carConsumption !== undefined) updates.carConsumption = data.carConsumption;
-  if (data.expenseTypes !== undefined) updates.expenseTypes = data.expenseTypes;
-  if (data.phoneNumber !== undefined) updates.phoneNumber = data.phoneNumber;
+  if (data.expenseTypes !== undefined) updates.expenseTypes = mergeDefaultExpenseTypes(data.expenseTypes);
+  if (data.phoneNumber !== undefined) {
+    const p = String(data.phoneNumber).trim();
+    updates.phoneNumber = p ? coerceStoredPhoneE164(p) : '';
+  }
   await updateDoc(ref, updates);
 }
 

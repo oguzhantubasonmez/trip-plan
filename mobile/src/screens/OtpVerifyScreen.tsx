@@ -8,7 +8,7 @@ import { auth } from '../lib/firebase';
 import { ensureUserDoc } from '../services/userProfile';
 import { useAppTheme } from '../ThemeContext';
 import type { AppTheme } from '../theme';
-import { maskPhone } from '../utils/phone';
+import { canonicalizeTrPhoneE164, maskPhone, normalizeE164 } from '../utils/phone';
 
 export function OtpVerifyScreen(props: {
   phoneE164: string;
@@ -36,7 +36,9 @@ export function OtpVerifyScreen(props: {
       const cred = PhoneAuthProvider.credential(props.verificationId, code.trim());
       const userCred = await signInWithCredential(auth, cred);
       const uid = userCred.user.uid;
-      const phoneNumber = userCred.user.phoneNumber || props.phoneE164;
+      const rawPhone = userCred.user.phoneNumber || props.phoneE164;
+      const phoneNumber =
+        canonicalizeTrPhoneE164(rawPhone) || normalizeE164(rawPhone) || String(rawPhone).trim();
       await ensureUserDoc({
         uid,
         phoneNumber,

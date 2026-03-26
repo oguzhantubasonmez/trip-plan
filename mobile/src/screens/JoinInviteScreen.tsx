@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
@@ -21,14 +21,31 @@ export function JoinInviteScreen(props: {
   const [error, setError] = useState<string | null>(null);
   const uid = auth.currentUser?.uid;
 
+  /** Boş id ile bu ekran hiç görünmesin (stack sırası / eski state); doğrudan ana ekrana. */
+  useLayoutEffect(() => {
+    const tid = String(props.tripId ?? '').trim();
+    if (!tid) {
+      props.onDecline();
+    }
+  }, [props.tripId]);
+
   useEffect(() => {
     let alive = true;
-    getTrip(props.tripId)
+    const tid = String(props.tripId ?? '').trim();
+    if (!tid) {
+      return () => {
+        alive = false;
+      };
+    }
+    setError(null);
+    getTrip(tid)
       .then((t) => {
-        if (alive) setTrip(t ?? null);
+        if (!alive) return;
+        if (!t) setError('Rota bulunamadı veya erişim yok.');
+        else setTrip(t);
       })
       .catch(() => {
-        if (alive) setError('Rota bulunamadı.');
+        if (alive) setError('Rota bulunamadı veya erişim yok.');
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -43,7 +60,7 @@ export function JoinInviteScreen(props: {
     setJoining(true);
     setError(null);
     try {
-      await addAttendeeToTrip(props.tripId, uid, 'viewer');
+      await addAttendeeToTrip(props.tripId, uid, 'viewer', uid);
       props.onJoined(props.tripId);
     } catch (e: any) {
       setError(e?.message || 'Katılım eklenemedi.');

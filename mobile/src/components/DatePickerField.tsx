@@ -51,6 +51,9 @@ export function DatePickerField(props: Props) {
             popperClassName="rwDatePickerPopper"
             wrapperClassName="rwDatePickerWrapper"
             className="rwDatePickerInput"
+            /** RN Web / ScrollView içinde popper altta kalıyordu; portal + body kökü */
+            withPortal
+            portalId="rw-datepicker-portal"
           />
         </View>
         {props.errorText ? <Text style={styles.error}>{props.errorText}</Text> : null}

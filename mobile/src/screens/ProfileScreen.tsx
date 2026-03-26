@@ -2,17 +2,28 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useMemo, useState } from 'react';
 import { signOut } from 'firebase/auth';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { CollapsibleSection } from '../components/CollapsibleSection';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
 import { TextField } from '../components/TextField';
 import { auth } from '../lib/firebase';
+import { getUserTripAggregateStats, type UserTripAggregateStats } from '../services/trips';
 import type { ExpenseType } from '../services/userProfile';
-import { getUserProfile, updateUserProfile } from '../services/userProfile';
+import {
+  DEFAULT_EXPENSE_TYPE_IDS,
+  getUserProfile,
+  updateUserProfile,
+} from '../services/userProfile';
 import { useAppTheme, useThemeMode } from '../ThemeContext';
 import type { AppTheme } from '../theme';
 import { nationalDigitsAfterTrCountry, normalizeE164 } from '../utils/phone';
 
-export function ProfileScreen(props: { onBack: () => void; onOpenFriends: () => void }) {
+export function ProfileScreen(props: {
+  /** Sekme çubuğundan açıldığında geri satırı gösterilmez */
+  variant?: 'stack' | 'tab';
+  onBack?: () => void;
+  onOpenFriends: () => void;
+}) {
   const theme = useAppTheme();
   const { mode, setMode } = useThemeMode();
   const styles = useMemo(() => createProfileStyles(theme), [theme]);
@@ -28,6 +39,9 @@ export function ProfileScreen(props: { onBack: () => void; onOpenFriends: () => 
   const [expenseTypes, setExpenseTypes] = useState<ExpenseType[]>([]);
   const [newExpenseName, setNewExpenseName] = useState('');
   const [typesBusy, setTypesBusy] = useState(false);
+  const [tripStats, setTripStats] = useState<UserTripAggregateStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!uid) return;
@@ -35,12 +49,29 @@ export function ProfileScreen(props: { onBack: () => void; onOpenFriends: () => 
     setDisplayName(p?.displayName ?? '');
     setCarConsumption(p?.carConsumption ?? '');
     setExpenseTypes(p?.expenseTypes ?? []);
+    setPhoneNational(nationalDigitsAfterTrCountry(p?.phoneNumber ?? ''));
+  }, [uid]);
+
+  const loadTripStats = useCallback(async () => {
+    if (!uid) return;
+    setStatsLoading(true);
+    setStatsError(null);
+    try {
+      const s = await getUserTripAggregateStats(uid);
+      setTripStats(s);
+    } catch (e: any) {
+      setStatsError(e?.message || 'Özet yüklenemedi.');
+      setTripStats(null);
+    } finally {
+      setStatsLoading(false);
+    }
   }, [uid]);
 
   useFocusEffect(
     useCallback(() => {
-      load();
-    }, [load])
+      void load();
+      void loadTripStats();
+    }, [load, loadTripStats])
   );
 
   async function save() {
@@ -66,6 +97,7 @@ export function ProfileScreen(props: { onBack: () => void; onOpenFriends: () => 
         carConsumption: carConsumption.trim() || undefined,
         phoneNumber,
       });
+      await load();
       setSaved(true);
     } finally {
       setLoading(false);
@@ -100,8 +132,35 @@ export function ProfileScreen(props: { onBack: () => void; onOpenFriends: () => 
   }
 
   function removeExpenseType(id: string) {
+    if (DEFAULT_EXPENSE_TYPE_IDS.has(id)) return;
     void persistExpenseTypes(expenseTypes.filter((x) => x.id !== id));
   }
+
+  const tripStatsSummary = useMemo(() => {
+    if (statsLoading && !tripStats) return 'Özet yükleniyor…';
+    if (statsError) return 'Özet alınamadı';
+    if (!tripStats) return 'Veri yok';
+    const cost =
+      tripStats.totalCostTl > 0
+        ? `${tripStats.totalCostTl.toLocaleString('tr-TR')} TL`
+        : 'masraf —';
+    return `${tripStats.tripCount} rota · ${tripStats.stopCount} durak · ${cost}`;
+  }, [statsLoading, statsError, tripStats]);
+
+  const profileSummary = useMemo(() => {
+    const name = displayName.trim();
+    if (name && authEmail) return `${name} · ${authEmail}`;
+    if (name) return name;
+    if (authEmail) return authEmail;
+    return 'E-posta, ad, telefon';
+  }, [displayName, authEmail]);
+
+  const expenseTypesSummary = useMemo(() => {
+    if (expenseTypes.length === 0) return 'Türler yükleniyor…';
+    return `${expenseTypes.length} tür`;
+  }, [expenseTypes.length]);
+
+  const themeSummary = mode === 'dark' ? 'Koyu tema açık' : 'Açık tema';
 
   return (
     <Screen>
@@ -109,18 +168,92 @@ export function ProfileScreen(props: { onBack: () => void; onOpenFriends: () => 
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator
+        showsVerticalScrollIndicator={false}
+        showsHorizontalScrollIndicator={false}
       >
-      <Pressable onPress={props.onBack} style={styles.backRow}>
-        <Text style={styles.backText}>← Geri</Text>
-      </Pressable>
+      {props.variant !== 'tab' && props.onBack ? (
+        <Pressable onPress={props.onBack} style={styles.backRow}>
+          <Text style={styles.backText}>← Geri</Text>
+        </Pressable>
+      ) : null}
       <View style={styles.header}>
         <Text style={styles.heroEmoji}>🚗</Text>
         <Text style={styles.title}>Profil</Text>
-        <Text style={styles.sub}>Varsayılan araç tüketimin; rotada istersen farklı değer de girebilirsin.</Text>
+        <Text style={styles.sub}>
+          Telefon rehber eşleşmesi için; yakıt alanı ise rota ekranındaki yakıt tahmininde varsayılan tüketim
+          olarak kullanılır.
+        </Text>
       </View>
 
-      <View style={styles.card}>
+      <CollapsibleSection
+        title="Gezi özeti"
+        collapsedSummary={tripStatsSummary}
+        containerStyle={[styles.card, styles.sectionGap]}
+      >
+        <Text style={styles.blockSub}>
+          Katıldığın rotalardaki duraklar, mesafe ve masrafların toplamı (tahmini değerler).
+        </Text>
+        <View style={{ height: theme.space.md }} />
+        {statsLoading && !tripStats ? (
+          <Text style={styles.statsMuted}>Özet yükleniyor…</Text>
+        ) : statsError ? (
+          <Text style={styles.statsError}>{statsError}</Text>
+        ) : tripStats ? (
+          <>
+            <View style={styles.statsGrid}>
+              <View style={styles.statCell}>
+                <Text style={styles.statValue}>{tripStats.tripCount}</Text>
+                <Text style={styles.statLabel}>Rota</Text>
+              </View>
+              <View style={styles.statCell}>
+                <Text style={styles.statValue}>{tripStats.stopCount}</Text>
+                <Text style={styles.statLabel}>Durak</Text>
+              </View>
+              <View style={styles.statCell}>
+                <Text style={styles.statValue}>{tripStats.approvedStopCount}</Text>
+                <Text style={styles.statLabel}>Onaylı durak</Text>
+              </View>
+            </View>
+            <View style={styles.statsDivider} />
+            <View style={styles.statRow}>
+              <Text style={styles.statRowLabel}>Toplam km</Text>
+              <Text style={styles.statRowValue}>
+                {tripStats.totalKm > 0 ? `~${tripStats.totalKm} km` : '—'}
+              </Text>
+            </View>
+            <View style={styles.statRow}>
+              <Text style={styles.statRowLabel}>Tahmini yol süresi</Text>
+              <Text style={styles.statRowValue}>{formatAggregateDrivingDuration(tripStats.totalDrivingMinutes)}</Text>
+            </View>
+            <View style={styles.statRow}>
+              <Text style={styles.statRowLabel}>Durak masrafları</Text>
+              <Text style={styles.statRowValue}>
+                {tripStats.totalStopExtraTl > 0 ? `${tripStats.totalStopExtraTl} TL` : '—'}
+              </Text>
+            </View>
+            <View style={styles.statRow}>
+              <Text style={styles.statRowLabel}>Yakıt (rota tahmini)</Text>
+              <Text style={styles.statRowValue}>
+                {tripStats.totalFuelTl > 0 ? `${tripStats.totalFuelTl} TL` : '—'}
+              </Text>
+            </View>
+            <View style={[styles.statRow, styles.statRowHighlight]}>
+              <Text style={styles.statRowLabel}>Toplam masraf</Text>
+              <Text style={styles.statRowValueStrong}>
+                {tripStats.totalCostTl > 0 ? `${tripStats.totalCostTl} TL` : '—'}
+              </Text>
+            </View>
+          </>
+        ) : (
+          <Text style={styles.statsMuted}>Özet yüklenemedi.</Text>
+        )}
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Profil bilgileri"
+        collapsedSummary={profileSummary}
+        containerStyle={[styles.card, styles.sectionGap]}
+      >
         <Text style={styles.fieldLabel}>E-posta</Text>
         <Text style={styles.emailReadonly}>{authEmail || '—'}</Text>
         <Text style={styles.emailHint}>Giriş adresin; buradan değiştirilemez.</Text>
@@ -143,7 +276,6 @@ export function ProfileScreen(props: { onBack: () => void; onOpenFriends: () => 
               placeholder="5xx xxx xx xx"
               keyboardType="phone-pad"
               onChangeText={setPhoneNational}
-              helperText="Rehberden arkadaş eşleştirmesi için. Boş bırakırsan eşleşme olmaz."
               maxLength={15}
             />
           </View>
@@ -155,26 +287,30 @@ export function ProfileScreen(props: { onBack: () => void; onOpenFriends: () => 
           placeholder="Örn. 7"
           keyboardType="number-pad"
           onChangeText={setCarConsumption}
-          helperText="100 km'de kaç litre yakıt tükettiğini gir (örn. 7 = 100 km'de 7 lt)."
+          helperText={
+            '100 km’de kaç litre yakıt (örn. 7). Rota detayında «Araç ve yakıt» bölümüne varsayılan olarak ' +
+            'düşer; istersen her rotada farklı değer girebilirsin.'
+          }
         />
         <View style={{ height: theme.space.md }} />
         <PrimaryButton title="💾 Kaydet" onPress={save} loading={loading} />
         {saved ? <Text style={styles.saved}>Kaydedildi.</Text> : null}
-      </View>
+      </CollapsibleSection>
 
-      <View style={{ height: theme.space.md }} />
-
-      <View style={styles.card}>
-        <Text style={styles.blockTitle}>Masraf türleri</Text>
+      <CollapsibleSection
+        title="Masraf türleri"
+        collapsedSummary={expenseTypesSummary}
+        containerStyle={[styles.card, styles.sectionGap]}
+      >
         <Text style={styles.blockSub}>
-          Rotalarda durak ekstra masrafı girerken bu türlerden seçim yapılır. İstediğin kadar özel tür
+          Yemek, İçecek, Konaklama ve Diğer her hesapta hazırdır. İstersen aşağıdan kendi türlerini de
           ekleyebilirsin.
         </Text>
         <View style={{ height: theme.space.sm }} />
         <TextField
           label="Yeni masraf türü"
           value={newExpenseName}
-          placeholder="Örn. Konaklama, Park, Yemek"
+          placeholder="Örn. Park, müze, yakıt"
           onChangeText={setNewExpenseName}
         />
         <View style={{ height: theme.space.sm }} />
@@ -185,51 +321,80 @@ export function ProfileScreen(props: { onBack: () => void; onOpenFriends: () => 
         />
         <View style={{ height: theme.space.md }} />
         {expenseTypes.length === 0 ? (
-          <Text style={styles.typesEmpty}>Henüz tür yok. Yukarıdan ekle.</Text>
+          <Text style={styles.typesEmpty}>Türler yükleniyor…</Text>
         ) : (
           expenseTypes.map((et) => (
             <View key={et.id} style={styles.typeRow}>
               <Text style={styles.typeName} numberOfLines={2}>
                 {et.name}
               </Text>
-              <Pressable
-                onPress={() => removeExpenseType(et.id)}
-                disabled={typesBusy}
-                style={styles.typeRemove}
-              >
-                <Text style={styles.typeRemoveText}>Sil</Text>
-              </Pressable>
+              {DEFAULT_EXPENSE_TYPE_IDS.has(et.id) ? (
+                <Text style={styles.typeBuiltin}>Standart</Text>
+              ) : (
+                <Pressable
+                  onPress={() => removeExpenseType(et.id)}
+                  disabled={typesBusy}
+                  style={styles.typeRemove}
+                >
+                  <Text style={styles.typeRemoveText}>Sil</Text>
+                </Pressable>
+              )}
             </View>
           ))
         )}
-      </View>
+      </CollapsibleSection>
 
-      <View style={[styles.themeRow, theme.shadowSoft]}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.themeTitle}>Koyu tema</Text>
-          <Text style={styles.themeSub}>Gece ve düşük ışık için</Text>
+      <CollapsibleSection
+        title="Görünüm"
+        collapsedSummary={themeSummary}
+        containerStyle={[styles.card, styles.sectionGap]}
+      >
+        <View style={styles.themeSwitchRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.themeTitle}>Koyu tema</Text>
+            <Text style={styles.themeSub}>Gece ve düşük ışık için</Text>
+          </View>
+          <Switch
+            value={mode === 'dark'}
+            onValueChange={(v) => setMode(v ? 'dark' : 'light')}
+            trackColor={{ false: theme.color.border, true: theme.color.primarySoft }}
+            thumbColor={mode === 'dark' ? theme.color.primary : theme.color.surface}
+          />
         </View>
-        <Switch
-          value={mode === 'dark'}
-          onValueChange={(v) => setMode(v ? 'dark' : 'light')}
-          trackColor={{ false: theme.color.border, true: theme.color.primarySoft }}
-          thumbColor={mode === 'dark' ? theme.color.primary : theme.color.surface}
-        />
-      </View>
+      </CollapsibleSection>
 
-      <View style={{ height: theme.space.lg }} />
-      <Pressable onPress={props.onOpenFriends} style={styles.extraBtn}>
-        <Text style={styles.extraBtnText}>Arkadaşlarım ve gruplar</Text>
-        <Text style={styles.extraBtnSub}>Liste, rehberden ekleme, gruplar</Text>
-      </Pressable>
+      <CollapsibleSection
+        title="Arkadaşlar ve gruplar"
+        collapsedSummary="Liste, rehberden ekleme, gruplar"
+        containerStyle={[styles.card, styles.sectionGap]}
+      >
+        <Pressable onPress={props.onOpenFriends} style={styles.extraBtnFlat}>
+          <Text style={styles.extraBtnText}>Arkadaşlarım ve gruplar</Text>
+          <Text style={styles.extraBtnSub}>Liste, rehberden ekleme, gruplar</Text>
+        </Pressable>
+      </CollapsibleSection>
 
-      <View style={{ height: theme.space.lg }} />
-      <Pressable onPress={handleSignOut} style={styles.signOutBtn}>
-        <Text style={styles.signOutText}>Çıkış yap</Text>
-      </Pressable>
+      <CollapsibleSection
+        title="Oturum"
+        collapsedSummary="Güvenli çıkış"
+        containerStyle={[styles.card, styles.sectionGap]}
+      >
+        <Pressable onPress={handleSignOut} style={styles.signOutBtn}>
+          <Text style={styles.signOutText}>Çıkış yap</Text>
+        </Pressable>
+      </CollapsibleSection>
       </ScrollView>
     </Screen>
   );
+}
+
+function formatAggregateDrivingDuration(totalMin: number): string {
+  if (totalMin <= 0) return '—';
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h === 0) return `~${m} dk`;
+  if (m === 0) return `~${h} sa`;
+  return `~${h} sa ${m} dk`;
 }
 
 function createProfileStyles(theme: AppTheme) {
@@ -251,6 +416,7 @@ function createProfileStyles(theme: AppTheme) {
       textAlign: 'center',
       paddingHorizontal: theme.space.sm,
     },
+    sectionGap: { marginBottom: theme.space.md },
     card: {
       backgroundColor: theme.color.surface,
       borderRadius: theme.radius.xl,
@@ -283,8 +449,55 @@ function createProfileStyles(theme: AppTheme) {
       fontWeight: '700',
       marginTop: theme.space.sm,
     },
-    blockTitle: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '800', marginBottom: 6 },
     blockSub: { color: theme.color.muted, fontSize: theme.font.small, lineHeight: 20 },
+    statsMuted: { color: theme.color.muted, fontSize: theme.font.small, fontStyle: 'italic' },
+    statsError: { color: theme.color.danger, fontSize: theme.font.small, fontWeight: '700' },
+    statsGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: theme.space.sm,
+    },
+    statCell: {
+      flexGrow: 1,
+      flexBasis: '28%',
+      minWidth: 88,
+      paddingVertical: theme.space.sm,
+      paddingHorizontal: theme.space.sm,
+      borderRadius: theme.radius.md,
+      backgroundColor: theme.color.inputBg,
+      borderWidth: 1,
+      borderColor: theme.color.subtle,
+      alignItems: 'center',
+    },
+    statValue: { color: theme.color.text, fontSize: theme.font.h2, fontWeight: '900' },
+    statLabel: {
+      color: theme.color.muted,
+      fontSize: theme.font.tiny,
+      fontWeight: '700',
+      marginTop: 4,
+      textAlign: 'center',
+    },
+    statsDivider: {
+      height: 1,
+      backgroundColor: theme.color.subtle,
+      marginVertical: theme.space.md,
+    },
+    statRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: 8,
+      gap: theme.space.md,
+    },
+    statRowHighlight: {
+      marginTop: 4,
+      paddingTop: theme.space.sm,
+      borderTopWidth: 1,
+      borderTopColor: theme.color.subtle,
+    },
+    statRowLabel: { color: theme.color.textSecondary, fontSize: theme.font.small, fontWeight: '600', flex: 1 },
+    statRowValue: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '700' },
+    statRowValueStrong: { color: theme.color.primaryDark, fontSize: theme.font.body, fontWeight: '900' },
     typesEmpty: { color: theme.color.muted, fontSize: theme.font.small, fontStyle: 'italic' },
     typeRow: {
       flexDirection: 'row',
@@ -298,33 +511,40 @@ function createProfileStyles(theme: AppTheme) {
     typeName: { flex: 1, color: theme.color.text, fontSize: theme.font.body, fontWeight: '600' },
     typeRemove: { paddingVertical: 6, paddingHorizontal: 10 },
     typeRemoveText: { color: theme.color.danger, fontSize: theme.font.small, fontWeight: '800' },
+    typeBuiltin: {
+      color: theme.color.muted,
+      fontSize: theme.font.tiny,
+      fontWeight: '700',
+      paddingVertical: 6,
+      paddingHorizontal: 8,
+    },
     saved: { color: theme.color.success, fontSize: theme.font.small, marginTop: theme.space.sm, fontWeight: '700' },
-    themeRow: {
+    themeSwitchRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: theme.color.surface,
-      borderRadius: theme.radius.xl,
-      padding: theme.space.md,
-      borderWidth: 1,
-      borderColor: theme.color.border,
       gap: theme.space.md,
+      paddingVertical: 4,
     },
     themeTitle: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '800' },
     themeSub: { color: theme.color.muted, fontSize: theme.font.tiny, marginTop: 2 },
-    extraBtn: {
-      backgroundColor: theme.color.surface,
-      borderRadius: theme.radius.xl,
+    extraBtnFlat: {
+      borderRadius: theme.radius.lg,
       padding: theme.space.lg,
       borderWidth: 1,
       borderColor: theme.color.cardBorderAccent,
-      ...theme.shadowCard,
+      backgroundColor: theme.color.inputBg,
     },
     extraBtnText: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '700' },
     extraBtnSub: { color: theme.color.muted, fontSize: theme.font.small, marginTop: 4 },
     signOutBtn: {
-      alignSelf: 'center',
-      paddingVertical: 12,
+      alignSelf: 'stretch',
+      alignItems: 'center',
+      paddingVertical: theme.space.md,
       paddingHorizontal: theme.space.lg,
+      borderRadius: theme.radius.md,
+      backgroundColor: theme.color.inputBg,
+      borderWidth: 1,
+      borderColor: theme.color.border,
     },
     signOutText: { color: theme.color.danger, fontSize: theme.font.body, fontWeight: '800' },
     versionLine: {

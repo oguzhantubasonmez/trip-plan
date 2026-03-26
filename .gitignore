@@ -4,6 +4,9 @@ mobile/.expo/
 mobile/dist/
 mobile/web-build/
 
+functions/node_modules/
+functions/lib/
+
 # Env and secrets (never commit)
 mobile/.env
 mobile/.env*.local

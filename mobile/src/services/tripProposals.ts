@@ -57,13 +57,13 @@ export async function getPendingProposalsForTrip(tripId: string): Promise<TripPr
   return out;
 }
 
-export async function approveProposal(proposalId: string): Promise<void> {
+export async function approveProposal(proposalId: string, appliedByUid?: string): Promise<void> {
   const ref = doc(db, COL, proposalId);
   const snap = await getDoc(ref);
   if (!snap.exists()) throw new Error('Öneri bulunamadı.');
   const v = snap.data() as any;
   if (v.status !== 'pending') throw new Error('Öneri artık beklemede değil.');
-  await updateStopFromPayload(v.stopId, v.payload || {});
+  await updateStopFromPayload(v.stopId, v.payload || {}, appliedByUid);
   await updateDoc(ref, { status: 'approved', updatedAt: serverTimestamp() });
 }
 

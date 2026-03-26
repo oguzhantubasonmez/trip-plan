@@ -37,10 +37,23 @@ if (process.env.EAS_BUILD === 'true') {
   }
 }
 
+const iosBase = base.expo.ios || {};
+const iosBg = iosBase.infoPlist?.UIBackgroundModes;
+const iosBgMerged = Array.from(
+  new Set([...(Array.isArray(iosBg) ? iosBg : []), 'remote-notification']),
+);
+
 module.exports = {
   ...base,
   expo: {
     ...base.expo,
+    ios: {
+      ...iosBase,
+      infoPlist: {
+        ...(iosBase.infoPlist || {}),
+        UIBackgroundModes: iosBgMerged,
+      },
+    },
     extra: {
       ...(base.expo.extra || {}),
       googleMapsApiKey,
@@ -48,6 +61,13 @@ module.exports = {
     },
     plugins: [
       ...base.expo.plugins,
+      [
+        'expo-location',
+        {
+          locationWhenInUsePermission:
+            'RouteWise, bulunduğun yerdeki anlık hava durumunu göstermek için konumunu kullanır.',
+        },
+      ],
       [
         'react-native-maps',
         {

@@ -2,6 +2,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -15,8 +16,10 @@ import { TextField } from '../components/TextField';
 import { auth } from '../lib/firebase';
 import { filterMutualFriendUids } from '../services/friends';
 import {
+  deleteGroup,
   getGroup,
   inviteMemberToGroup,
+  leaveGroup,
   listPendingGroupInvitesForGroup,
   removeMemberFromGroup,
   updateGroup,
@@ -43,6 +46,7 @@ export function GroupDetailScreen(props: {
   const [addMemberModal, setAddMemberModal] = useState(false);
   const [pendingInvites, setPendingInvites] = useState<GroupInvite[]>([]);
   const [mutualFriendIds, setMutualFriendIds] = useState<string[]>([]);
+  const [deletingGroup, setDeletingGroup] = useState(false);
   const currentUid = auth.currentUser?.uid;
 
   const load = useCallback(async () => {
@@ -55,7 +59,13 @@ export function GroupDetailScreen(props: {
         setEditName(g.name);
         const myProfile = await getUserProfile(currentUid);
         const friends = myProfile?.friends ?? [];
-        const uidsToLoad = [...new Set([currentUid, ...g.memberIds, ...friends])];
+        const [mutual, pending] = await Promise.all([
+          filterMutualFriendUids(currentUid, friends),
+          listPendingGroupInvitesForGroup(props.groupId),
+        ]);
+        setMutualFriendIds(mutual);
+        setPendingInvites(pending);
+        const uidsToLoad = [...new Set([currentUid, ...g.memberIds, ...friends, ...mutual])];
         const map = new Map<string, UserProfile>();
         await Promise.all(
           uidsToLoad.map(async (id) => {
@@ -119,11 +129,81 @@ export function GroupDetailScreen(props: {
     }
   }
 
-  async function handleRemoveMember(uid: string) {
-    try {
-      await removeMemberFromGroup(props.groupId, uid);
-      await load();
-    } catch (_) {}
+  function confirmRemoveMember(targetUid: string) {
+    if (!currentUid) return;
+    const label = displayName(targetUid);
+    Alert.alert(
+      'Üyeyi çıkar',
+      `«${label}» gruptan çıkarılsın mı? Kişiye uygulama içi bildirim gider.`,
+      [
+        { text: 'İptal', style: 'cancel' },
+        {
+          text: 'Çıkar',
+          style: 'destructive',
+          onPress: () =>
+            void (async () => {
+              try {
+                await removeMemberFromGroup(props.groupId, targetUid, currentUid);
+                await load();
+              } catch (e: any) {
+                setError(e?.message || 'Üye çıkarılamadı.');
+              }
+            })(),
+        },
+      ]
+    );
+  }
+
+  function confirmLeaveGroup() {
+    if (!currentUid || !group) return;
+    Alert.alert(
+      'Gruptan ayrıl',
+      `«${group.name}» grubundan ayrılmak istediğine emin misin? Grup sahibine bildirim gider.`,
+      [
+        { text: 'Vazgeç', style: 'cancel' },
+        {
+          text: 'Ayrıl',
+          style: 'destructive',
+          onPress: () =>
+            void (async () => {
+              try {
+                await leaveGroup(props.groupId, currentUid);
+                props.onBack();
+              } catch (e: any) {
+                setError(e?.message || 'Gruptan ayrılamadın.');
+              }
+            })(),
+        },
+      ]
+    );
+  }
+
+  function confirmDeleteGroup() {
+    if (!currentUid || !group || group.ownerId !== currentUid) return;
+    Alert.alert(
+      'Grubu sil',
+      `«${group.name}» kalıcı olarak silinir. Üyeler grupta görünmez; bekleyen davetler iptal olur. Emin misin?`,
+      [
+        { text: 'İptal', style: 'cancel' },
+        {
+          text: 'Grubu sil',
+          style: 'destructive',
+          onPress: () =>
+            void (async () => {
+              setDeletingGroup(true);
+              setError(null);
+              try {
+                await deleteGroup({ groupId: props.groupId, actorUid: currentUid });
+                props.onBack();
+              } catch (e: any) {
+                setError(e?.message || 'Grup silinemedi.');
+              } finally {
+                setDeletingGroup(false);
+              }
+            })(),
+        },
+      ]
+    );
   }
 
   if (loading && !group) {
@@ -150,9 +230,16 @@ export function GroupDetailScreen(props: {
   }
 
   const isOwner = group.ownerId === currentUid;
+  const isMember = Boolean(currentUid && group.memberIds.includes(currentUid));
 
   return (
     <Screen>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: appTheme.space.xl }}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
       <Pressable onPress={props.onBack} style={styles.backRow}>
         <Text style={styles.backText}>← Geri</Text>
       </Pressable>
@@ -197,7 +284,7 @@ export function GroupDetailScreen(props: {
               <View key={memberUid} style={styles.memberRow}>
                 <Text style={styles.memberName}>{displayName(memberUid)}</Text>
                 {isOwner && memberUid !== group.ownerId ? (
-                  <Pressable onPress={() => handleRemoveMember(memberUid)} style={styles.removeBtn}>
+                  <Pressable onPress={() => confirmRemoveMember(memberUid)} style={styles.removeBtn}>
                     <Text style={styles.removeBtnText}>Çıkar</Text>
                   </Pressable>
                 ) : null}
@@ -214,6 +301,38 @@ export function GroupDetailScreen(props: {
           </View>
         )}
       </View>
+
+      {isOwner ? (
+        <View style={styles.section}>
+          <Pressable
+            onPress={confirmDeleteGroup}
+            disabled={deletingGroup}
+            style={({ pressed }) => [
+              styles.deleteGroupBtn,
+              pressed && { opacity: 0.88 },
+              deletingGroup ? { opacity: 0.55 } : null,
+            ]}
+          >
+            <Text style={styles.deleteGroupBtnText}>{deletingGroup ? 'Siliniyor…' : 'Grubu sil'}</Text>
+          </Pressable>
+          <Text style={styles.muted}>
+            Grubu yalnızca sen oluşturduğun için silebilirsin. Silinince üyeler bu grubu listede görmez.
+          </Text>
+        </View>
+      ) : null}
+
+      {!isOwner && isMember ? (
+        <View style={styles.section}>
+          <Pressable onPress={confirmLeaveGroup} style={styles.leaveBtn}>
+            <Text style={styles.leaveBtnText}>Gruptan ayrıl</Text>
+          </Pressable>
+          <Text style={styles.muted}>
+            Ayrılınca grup sahibine bildirim gider; tekrar katılmak için davet gerekir.
+          </Text>
+        </View>
+      ) : null}
+
+      </ScrollView>
 
       <Modal
         visible={addMemberModal}
@@ -309,5 +428,26 @@ function createGroupDetailStyles(t: AppTheme) {
     friendRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12 },
     friendName: { color: t.color.text, fontSize: t.font.body },
     friendAdd: { color: t.color.primary, fontSize: t.font.small, fontWeight: '700' },
+    leaveBtn: {
+      alignSelf: 'flex-start',
+      paddingVertical: 10,
+      paddingHorizontal: t.space.md,
+      borderRadius: t.radius.md,
+      borderWidth: 1,
+      borderColor: t.color.danger,
+      marginBottom: t.space.sm,
+    },
+    leaveBtnText: { color: t.color.danger, fontSize: t.font.body, fontWeight: '800' },
+    deleteGroupBtn: {
+      alignSelf: 'flex-start',
+      paddingVertical: 12,
+      paddingHorizontal: t.space.md,
+      borderRadius: t.radius.md,
+      backgroundColor: 'rgba(239,68,68,0.14)',
+      borderWidth: 1,
+      borderColor: t.color.danger,
+      marginBottom: t.space.sm,
+    },
+    deleteGroupBtnText: { color: t.color.danger, fontSize: t.font.body, fontWeight: '800' },
   });
 }

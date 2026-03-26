@@ -14,7 +14,7 @@ import {
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
 import { auth } from '../lib/firebase';
-import { deleteGroup, getGroupsForUser } from '../services/groups';
+import { deleteGroup, listGroupsVisibleToUser } from '../services/groups';
 import type { Group } from '../types/group';
 import { useAppTheme } from '../ThemeContext';
 import type { AppTheme } from '../theme';
@@ -23,6 +23,8 @@ const SWIPE_ACTION_WIDTH = 76;
 
 type SwipeRowProps = {
   item: Group;
+  isOwner: boolean;
+  actorUid: string;
   appTheme: AppTheme;
   styles: ReturnType<typeof createGroupsStyles>;
   openSwipeId: string | null;
@@ -33,6 +35,8 @@ type SwipeRowProps = {
 
 function GroupSwipeRow({
   item,
+  isOwner,
+  actorUid,
   appTheme,
   styles,
   openSwipeId,
@@ -40,6 +44,24 @@ function GroupSwipeRow({
   onOpenGroup,
   onDeleted,
 }: SwipeRowProps) {
+  if (!isOwner) {
+    return (
+      <Pressable
+        onPress={() => onOpenGroup(item.groupId)}
+        style={({ pressed }) => [
+          styles.groupCard,
+          appTheme.shadowSoft,
+          pressed && styles.groupCardPressed,
+        ]}
+      >
+        <Text style={styles.groupName}>{item.name}</Text>
+        <Text style={styles.groupMeta}>
+          {item.memberIds.length} {item.memberIds.length === 1 ? 'kişi' : 'kişi'} · Üye
+        </Text>
+      </Pressable>
+    );
+  }
+
   const totalActionsWidth = SWIPE_ACTION_WIDTH * 2;
   const translateX = useRef(new Animated.Value(0)).current;
   const startOffset = useRef(0);
@@ -90,18 +112,14 @@ function GroupSwipeRow({
           const end = startOffset.current + g.dx;
           const isTap = Math.abs(g.dx) < 10 && Math.abs(g.dy) < 10;
           if (isTap) {
-            if (isOpen) {
-              snapTo(0);
-              return;
-            }
-            onOpenGroup(item.groupId);
+            if (isOpen) snapTo(0);
             return;
           }
           const open = end < -totalActionsWidth / 2 || g.vx < -0.45;
           snapTo(open ? -totalActionsWidth : 0);
         },
       }),
-    [isOpen, item.groupId, onOpenGroup, snapTo, totalActionsWidth, translateX]
+    [isOpen, item.groupId, snapTo, totalActionsWidth, translateX]
   );
 
   function handleEdit() {
@@ -122,7 +140,7 @@ function GroupSwipeRow({
             setOpenSwipeId(null);
             void (async () => {
               try {
-                await deleteGroup(item.groupId);
+                await deleteGroup({ groupId: item.groupId, actorUid });
                 onDeleted();
               } catch (e: any) {
                 Alert.alert('Silinemedi', e?.message || 'Grup silinemedi.');
@@ -162,12 +180,25 @@ function GroupSwipeRow({
         style={[styles.swipeForeground, { transform: [{ translateX }] }]}
         {...panResponder.panHandlers}
       >
-        <View style={[styles.groupCard, appTheme.shadowSoft]}>
+        <Pressable
+          onPress={() => {
+            if (isOpen) {
+              snapTo(0);
+              return;
+            }
+            onOpenGroup(item.groupId);
+          }}
+          style={({ pressed }) => [
+            styles.groupCard,
+            appTheme.shadowSoft,
+            pressed && styles.groupCardPressed,
+          ]}
+        >
           <Text style={styles.groupName}>{item.name}</Text>
           <Text style={styles.groupMeta}>
             {item.memberIds.length} {item.memberIds.length === 1 ? 'kişi' : 'kişi'}
           </Text>
-        </View>
+        </Pressable>
       </Animated.View>
     </View>
   );
@@ -195,7 +226,7 @@ export function GroupsScreen(props: {
     setLoading(true);
     setLoadError(null);
     try {
-      const list = await getGroupsForUser(uid);
+      const list = await listGroupsVisibleToUser(uid);
       setGroups(list);
     } catch (e: any) {
       const msg =
@@ -260,6 +291,8 @@ export function GroupsScreen(props: {
           renderItem={({ item }) => (
             <GroupSwipeRow
               item={item}
+              isOwner={item.ownerId === uid}
+              actorUid={uid ?? ''}
               appTheme={appTheme}
               styles={styles}
               openSwipeId={openSwipeId}
@@ -341,6 +374,7 @@ function createGroupsStyles(t: AppTheme) {
       borderWidth: 1,
       borderColor: t.color.border,
     },
+    groupCardPressed: { opacity: 0.92 },
     groupName: { color: t.color.text, fontSize: t.font.h2, fontWeight: '800' },
     groupMeta: { color: t.color.muted, fontSize: t.font.small, marginTop: 4 },
   });

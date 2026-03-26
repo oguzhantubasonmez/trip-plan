@@ -1,4 +1,20 @@
-/* Takvim — açık tema, gezi uygulaması */
+/* Rota detay vb.: RN Web ScrollView — dikey scrollbar görünmez (kaydırma çalışır) */
+#rw-scroll-trip-detail {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+#rw-scroll-trip-detail::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Takvim — portal (document.body); RN Web stacking context üstünde */
+#rw-datepicker-portal {
+  position: relative;
+  z-index: 2147483647;
+}
+
 .react-datepicker-popper,
 .rwDatePickerPopper {
   z-index: 9999 !important;

@@ -1,4 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
@@ -8,21 +7,11 @@ import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-nativ
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Screen } from './src/components/Screen';
 import { auth } from './src/lib/firebase';
-import { ThemeProvider, useAppTheme, useThemeMode } from './src/ThemeContext';
-import { ContactsOnboardingScreen, CONTACTS_ONBOARDING_SEEN_KEY } from './src/screens/ContactsOnboardingScreen';
-import { CreateGroupScreen } from './src/screens/CreateGroupScreen';
-import { CreateTripScreen } from './src/screens/CreateTripScreen';
-import { FriendInviteScreen } from './src/screens/FriendInviteScreen';
-import { FriendsHubScreen } from './src/screens/FriendsHubScreen';
-import { GroupDetailScreen } from './src/screens/GroupDetailScreen';
-import { GroupsScreen } from './src/screens/GroupsScreen';
-import { HomeScreen } from './src/screens/HomeScreen';
-import { JoinInviteScreen } from './src/screens/JoinInviteScreen';
-import { AuthScreen } from './src/screens/AuthScreen';
-import { ProfileScreen } from './src/screens/ProfileScreen';
-import { EditTripScreen } from './src/screens/EditTripScreen';
-import { TripDetailScreen } from './src/screens/TripDetailScreen';
+import { MainTabNavigator } from './src/navigation/MainTabNavigator';
 import type { RootStackParamList } from './src/navigation/types';
+import { ThemeProvider, useAppTheme, useThemeMode } from './src/ThemeContext';
+import { AuthScreen } from './src/screens/AuthScreen';
+import { JoinInviteScreen } from './src/screens/JoinInviteScreen';
 import type { AppTheme } from './src/theme';
 
 /** Sadece web: mobilde `window` polyfill olabilir ama `window.location` yok → .search patlar. */
@@ -33,8 +22,11 @@ const getInitialInviteTripId = (): string | null => {
     const search = window.location.search;
     if (typeof search !== 'string') return null;
     const p = new URLSearchParams(search);
-    const id = p.get('invite');
-    if (id && typeof window.history?.replaceState === 'function') {
+    const raw = p.get('invite');
+    if (raw == null) return null;
+    const id = String(raw).trim();
+    if (!id) return null;
+    if (typeof window.history?.replaceState === 'function') {
       window.history.replaceState({}, '', window.location.pathname || '/');
     }
     return id;
@@ -65,42 +57,29 @@ function AppInner() {
   const { mode } = useThemeMode();
   const bootStyles = useMemo(() => createBootStyles(appTheme), [appTheme]);
   const [user, setUser] = useState<User | null>(null);
-  const [booting, setBooting] = useState(true);
-  const [contactsOnboardingSeen, setContactsOnboardingSeen] = useState<boolean | null>(null);
+  const [authReady, setAuthReady] = useState(false);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => setUser(u));
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthReady(true);
+    });
     return () => unsub();
   }, []);
 
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const v = await AsyncStorage.getItem(CONTACTS_ONBOARDING_SEEN_KEY);
-        if (alive) setContactsOnboardingSeen(v === '1');
-      } finally {
-        if (alive) setBooting(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
+  /** Giriş sonrası doğrudan ana sekme; `?invite=` yalnızca geçerli id ile davet ekranına gider. */
+  const initialSignedInRoute = useMemo(() => {
+    const id = String(initialInviteTripId ?? '').trim();
+    if (id.length > 0) return 'JoinInvite' as const;
+    return 'Main' as const;
   }, []);
 
-  /** İlk kurulum: rehber tanıtımı → (isteğe bağlı) arkadaş ekranı; sonraki her açılışta doğrudan ana sayfa. */
-  const initialSignedInRoute = useMemo(() => {
-    if (initialInviteTripId) return 'JoinInvite' as const;
-    if (contactsOnboardingSeen === false) return 'ContactsOnboarding' as const;
-    return 'Home' as const;
-  }, [contactsOnboardingSeen]);
-
-  if (booting || contactsOnboardingSeen === null) {
+  if (!authReady) {
     return (
       <Screen>
         <View style={bootStyles.boot}>
           <ActivityIndicator color={appTheme.color.primary} />
-          <Text style={bootStyles.bootText}>Hazırlanıyor...</Text>
+          <Text style={bootStyles.bootText}>Hazırlanıyor…</Text>
         </View>
         <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
       </Screen>
@@ -122,118 +101,25 @@ function AppInner() {
           </>
         ) : (
           <>
-            <Stack.Screen name="ContactsOnboarding">
-              {({ navigation }) => (
-                <ContactsOnboardingScreen
-                  onDone={async () => {
-                    setContactsOnboardingSeen(true);
-                    navigation.replace('FriendInvite');
-                  }}
-                />
-              )}
-            </Stack.Screen>
-            <Stack.Screen name="FriendInvite">
-              {({ navigation }) => <FriendInviteScreen onDone={() => navigation.replace('Home')} />}
+            <Stack.Screen name="Main">
+              {() => <MainTabNavigator />}
             </Stack.Screen>
             <Stack.Screen
               name="JoinInvite"
               initialParams={
-                initialInviteTripId ? { tripId: initialInviteTripId } : { tripId: '' }
+                initialInviteTripId ? { tripId: String(initialInviteTripId).trim() } : undefined
               }
             >
               {({ route, navigation }) => (
                 <JoinInviteScreen
-                  tripId={route.params.tripId || initialInviteTripId || ''}
-                  onJoined={(tripId) => navigation.replace('TripDetail', { tripId })}
-                  onDecline={() => navigation.replace('Home')}
-                />
-              )}
-            </Stack.Screen>
-            <Stack.Screen name="Home">
-              {({ navigation }) => (
-                <HomeScreen
-                  onCreateTrip={() => navigation.navigate('CreateTrip')}
-                  onOpenTrip={(tripId) => navigation.navigate('TripDetail', { tripId })}
-                  onOpenProfile={() => navigation.navigate('Profile')}
-                  onOpenFriends={() => navigation.navigate('FriendsHub')}
-                />
-              )}
-            </Stack.Screen>
-            <Stack.Screen name="FriendsHub">
-              {({ navigation }) => (
-                <FriendsHubScreen
-                  onBack={() => navigation.goBack()}
-                  onOpenGroups={() => navigation.navigate('Groups')}
-                  onOpenContactInvite={() => navigation.navigate('FriendInviteBrowse')}
-                />
-              )}
-            </Stack.Screen>
-            <Stack.Screen name="FriendInviteBrowse">
-              {({ navigation }) => (
-                <FriendInviteScreen onDone={() => navigation.goBack()} />
-              )}
-            </Stack.Screen>
-            <Stack.Screen name="Profile">
-              {({ navigation }) => (
-                <ProfileScreen
-                  onBack={() => navigation.goBack()}
-                  onOpenFriends={() => navigation.navigate('FriendsHub')}
-                />
-              )}
-            </Stack.Screen>
-            <Stack.Screen name="Groups">
-              {({ navigation }) => (
-                <GroupsScreen
-                  onBack={() => navigation.goBack()}
-                  onCreateGroup={() => navigation.navigate('CreateGroup')}
-                  onOpenGroup={(groupId) => navigation.navigate('GroupDetail', { groupId })}
-                />
-              )}
-            </Stack.Screen>
-            <Stack.Screen name="CreateGroup">
-              {({ navigation }) => (
-                <CreateGroupScreen
-                  onBack={() => navigation.goBack()}
-                  onCreated={(groupId) => navigation.replace('GroupDetail', { groupId })}
-                />
-              )}
-            </Stack.Screen>
-            <Stack.Screen name="GroupDetail">
-              {({ route, navigation }) => (
-                <GroupDetailScreen
-                  groupId={route.params.groupId}
-                  onBack={() => navigation.goBack()}
-                />
-              )}
-            </Stack.Screen>
-            <Stack.Screen name="CreateTrip">
-              {({ navigation }) => (
-                <CreateTripScreen
-                  onCreated={(tripId, opts) =>
-                    navigation.replace('TripDetail', {
-                      tripId,
-                      openAddPlace: !opts?.skipAddPlaceModal,
+                  tripId={String(route.params?.tripId ?? initialInviteTripId ?? '').trim()}
+                  onJoined={(tripId) =>
+                    navigation.replace('Main', {
+                      screen: 'HomeTab',
+                      params: { screen: 'TripDetail', params: { tripId } },
                     })
                   }
-                  onBack={() => navigation.goBack()}
-                />
-              )}
-            </Stack.Screen>
-            <Stack.Screen name="EditTrip">
-              {({ route, navigation }) => (
-                <EditTripScreen
-                  tripId={route.params.tripId}
-                  onDone={() => navigation.goBack()}
-                  onBack={() => navigation.goBack()}
-                />
-              )}
-            </Stack.Screen>
-            <Stack.Screen name="TripDetail">
-              {({ route, navigation }) => (
-                <TripDetailScreen
-                  tripId={route.params.tripId}
-                  openAddPlace={route.params.openAddPlace}
-                  onBack={() => navigation.goBack()}
+                  onDecline={() => navigation.replace('Main')}
                 />
               )}
             </Stack.Screen>

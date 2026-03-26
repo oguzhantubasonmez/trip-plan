@@ -39,11 +39,16 @@ export type PlaceDetails = {
   userRatingsTotal?: number;
 };
 
-/** Kısa gösterim: "★ 4,5 (1,2k)" veya null */
-export function formatGooglePlaceRatingLine(
+/** Google yıldız rengi (durak / yer kartları) */
+export const GOOGLE_PLACE_RATING_STAR_COLOR = '#EAB308';
+
+export type GooglePlaceRatingParts = { valueText: string };
+
+/** Puan metni (yıldız hariç): "4,5 (1,2k)" */
+export function getGooglePlaceRatingParts(
   rating?: number | null,
   userRatingsTotal?: number | null
-): string | null {
+): GooglePlaceRatingParts | null {
   if (rating == null || typeof rating !== 'number' || Number.isNaN(rating) || rating <= 0) return null;
   const r = Math.min(5, Math.max(0, rating));
   const rounded = Math.round(r * 10) / 10;
@@ -66,7 +71,16 @@ export function formatGooglePlaceRatingLine(
       suffix = ` (${n.toLocaleString('tr-TR')})`;
     }
   }
-  return `★ ${tr}${suffix}`;
+  return { valueText: `${tr}${suffix}` };
+}
+
+/** Kısa gösterim: "★ 4,5 (1,2k)" veya null */
+export function formatGooglePlaceRatingLine(
+  rating?: number | null,
+  userRatingsTotal?: number | null
+): string | null {
+  const p = getGooglePlaceRatingParts(rating, userRatingsTotal);
+  return p ? `★ ${p.valueText}` : null;
 }
 
 export type PlacesSearchMode = 'all' | 'regions' | 'geocode';

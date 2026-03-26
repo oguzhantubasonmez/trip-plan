@@ -47,8 +47,10 @@ export function PrimaryButton(props: {
           end={{ x: 1, y: 1 }}
           style={styles.gradient}
         >
-          <View style={styles.inner}>
-            <Text style={styles.text}>{props.loading ? '...' : props.title}</Text>
+          <View style={[styles.inner, compact && styles.innerCompact]}>
+            <Text style={[styles.text, compact && styles.textCompact]}>
+              {props.loading ? '...' : props.title}
+            </Text>
           </View>
         </LinearGradient>
       </Pressable>
@@ -135,6 +137,10 @@ function createPrimaryButtonStyles(theme: AppTheme) {
       paddingVertical: 13,
       paddingHorizontal: 20,
       alignItems: 'center',
+    },
+    outlineBtnCompact: {
+      paddingVertical: 9,
+      paddingHorizontal: 14,
     },
     outlinePressed: { backgroundColor: theme.color.primarySoft },
     outlineText: {

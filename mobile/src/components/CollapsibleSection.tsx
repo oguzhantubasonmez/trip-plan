@@ -15,6 +15,9 @@ type Props = {
   /** Kapalıyken başlığın altında gösterilen kısa özet */
   collapsedSummary?: string;
   defaultOpen?: boolean;
+  /** İkisi de verilirse kontrollü mod (örn. derin linkten yorumlar açık) */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   /** Daha az dikey boşluk ve küçük başlık (mobil rota ekranı için) */
   compact?: boolean;
   /** Başlık fontunu bir kademe daha küçült (örn. Katılımcılar) */
@@ -34,13 +37,20 @@ export function CollapsibleSection(props: Props) {
     () => createStyles(theme, compact, smallTitle),
     [theme, compact, smallTitle]
   );
-  const [open, setOpen] = useState(props.defaultOpen ?? false);
+  const controlled = props.open !== undefined && props.onOpenChange != null;
+  const [internalOpen, setInternalOpen] = useState(props.defaultOpen ?? false);
+  const open = controlled ? Boolean(props.open) : internalOpen;
+  function toggle() {
+    const next = !open;
+    if (controlled) props.onOpenChange?.(next);
+    else setInternalOpen(next);
+  }
 
   return (
     <View style={[styles.card, props.containerStyle]}>
       <View style={styles.headerRow}>
         <Pressable
-          onPress={() => setOpen((o) => !o)}
+          onPress={toggle}
           style={({ pressed }) => [styles.headerMain, pressed && { opacity: 0.92 }]}
           accessibilityRole="button"
           accessibilityState={{ expanded: open }}
@@ -109,6 +119,9 @@ function createStyles(t: AppTheme, compact: boolean, smallTitle: boolean) {
     },
     body: {
       marginTop: compact ? t.space.sm : t.space.md,
+      /** Web / bazı flex üstlerde gövde kalan yüksekliği doldurup içeriği itebiliyordu */
+      flexGrow: 0,
+      alignSelf: 'stretch',
     },
   });
 }

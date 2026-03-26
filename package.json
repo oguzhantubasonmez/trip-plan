@@ -8,6 +8,8 @@
     "android:tunnel": "npm --prefix mobile run android:tunnel",
     "ios": "npm --prefix mobile run ios",
     "web": "npm --prefix mobile run web",
-    "eas": "cd mobile && npx eas-cli"
+    "eas": "cd mobile && npx eas-cli",
+    "eas:android:apk": "cd mobile && npx eas-cli build --platform android --profile preview",
+    "eas:android:prod": "cd mobile && npx eas-cli build --platform android --profile production"
   }
 }

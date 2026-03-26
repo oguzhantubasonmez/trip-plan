@@ -164,3 +164,140 @@ export async function fetchDrivingLegs(
 export function sumLegDistanceKm(legs: RouteLeg[]): number {
   return Math.round(legs.reduce((s, l) => s + l.distanceKm, 0) * 10) / 10;
 }
+
+/** Harita çizgisi: Routes API encoded polyline */
+const FIELD_MASK_ENCODED_POLYLINE = 'routes.polyline.encodedPolyline';
+
+export type LatLng = { latitude: number; longitude: number };
+
+/** Google Encoded Polyline Algorithm — koordinat listesi */
+export function decodeEncodedPolyline(encoded: string): LatLng[] {
+  const poly: LatLng[] = [];
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+  while (index < encoded.length) {
+    let b: number;
+    let shift = 0;
+    let result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlat = (result & 1) !== 0 ? ~(result >> 1) : result >> 1;
+    lat += dlat;
+    shift = 0;
+    result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlng = (result & 1) !== 0 ? ~(result >> 1) : result >> 1;
+    lng += dlng;
+    poly.push({ latitude: lat / 1e5, longitude: lng / 1e5 });
+  }
+  return poly;
+}
+
+function sameLatLng(a: LatLng, b: LatLng): boolean {
+  return Math.abs(a.latitude - b.latitude) < 1e-5 && Math.abs(a.longitude - b.longitude) < 1e-5;
+}
+
+function appendPolylineUnique(accum: LatLng[], next: LatLng[]): void {
+  for (let i = 0; i < next.length; i++) {
+    if (accum.length > 0 && i === 0 && sameLatLng(accum[accum.length - 1], next[0])) continue;
+    accum.push(next[i]);
+  }
+}
+
+async function postComputeRoutesEncodedPolyline(
+  body: Record<string, unknown>,
+  key: string
+): Promise<string | null> {
+  try {
+    const res = await fetch(ROUTES_COMPUTE_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': key,
+        'X-Goog-FieldMask': FIELD_MASK_ENCODED_POLYLINE,
+      },
+      body: JSON.stringify(body),
+    });
+    const data = (await res.json()) as RoutesErrorBody & {
+      routes?: { polyline?: { encodedPolyline?: string } }[];
+    };
+    if (!res.ok || data.error) return null;
+    const enc = data.routes?.[0]?.polyline?.encodedPolyline;
+    return typeof enc === 'string' && enc.length > 0 ? enc : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchEncodedPolylineOneRequest(
+  coords: LatLng[],
+  key: string
+): Promise<string | null> {
+  if (coords.length < 2) return null;
+  const req: Record<string, unknown> = {
+    origin: waypoint(coords[0].latitude, coords[0].longitude),
+    destination: waypoint(coords[coords.length - 1].latitude, coords[coords.length - 1].longitude),
+    travelMode: 'DRIVE',
+    routingPreference: 'TRAFFIC_UNAWARE',
+    languageCode: 'tr',
+    regionCode: 'TR',
+  };
+  if (coords.length > 2) {
+    req.intermediates = coords.slice(1, -1).map((c) => waypoint(c.latitude, c.longitude));
+  }
+  return postComputeRoutesEncodedPolyline(req, key);
+}
+
+async function fetchDrivingRoutePolylinePairwise(
+  coords: LatLng[],
+  key: string
+): Promise<LatLng[] | null> {
+  const out: LatLng[] = [];
+  for (let i = 1; i < coords.length; i++) {
+    const enc = await postComputeRoutesEncodedPolyline(
+      {
+        origin: waypoint(coords[i - 1].latitude, coords[i - 1].longitude),
+        destination: waypoint(coords[i].latitude, coords[i].longitude),
+        travelMode: 'DRIVE',
+        routingPreference: 'TRAFFIC_UNAWARE',
+        languageCode: 'tr',
+        regionCode: 'TR',
+      },
+      key
+    );
+    if (!enc) return null;
+    const pts = decodeEncodedPolyline(enc);
+    if (pts.length === 0) return null;
+    appendPolylineUnique(out, pts);
+  }
+  return out.length >= 2 ? out : null;
+}
+
+/**
+ * Araç yoluna uygun çizgi (Google Routes API polyline).
+ * Anahtar veya API yoksa null; çağıran düz çizgiye düşebilir.
+ */
+export async function fetchDrivingRoutePolyline(coords: LatLng[]): Promise<LatLng[] | null> {
+  if (coords.length < 2) return null;
+  const key = getGoogleMapsApiKey();
+  if (!key) return null;
+
+  const intermediateCount = coords.length - 2;
+  let encoded: string | null = null;
+  if (intermediateCount <= MAX_INTERMEDIATES) {
+    encoded = await fetchEncodedPolylineOneRequest(coords, key);
+  }
+  if (encoded) {
+    const pts = decodeEncodedPolyline(encoded);
+    return pts.length >= 2 ? pts : null;
+  }
+  return fetchDrivingRoutePolylinePairwise(coords, key);
+}

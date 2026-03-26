@@ -2,10 +2,15 @@
 // Firestore kuralları — Firebase Console > Firestore > Kurallar > Yapıştır + Yayınla
 // =============================================================================
 //
-// İstek gönderirken "permission denied" ama listede kullanıcı görünüyorsa:
-// - users okuması çalışıyor, friendRequests YAZMASI (create/update/delete) engelleniyor demektir.
-// - Konsolda mutlaka aşağıdaki `match /friendRequests/...` bloğu olmalı; adı `friendRequest` (tekil)
-//   veya farklı yazılırsa yazma reddedilir.
+// İstek gönderirken "permission denied" / "Missing or insufficient permissions":
+//
+// 1) users — Arkadaş arama (e-posta, displayNameLower, phoneNumber) koleksiyon SORGUSU kullanır.
+//    Kural yalnızca "request.auth.uid == userId" ile okumaya izin veriyorsa, sorgu TAMAMEN reddedilir
+//    (eşleşen belgeleri tek tek okuyamazsınız). Çözüm: giriş yapmış herkesin users belgelerini
+//    okuyabilmesi (allow read: if signedIn();), yazmanın ise yalnızca kendi uid’siyle sınırlı olması.
+//
+// 2) friendRequests — İstek listesi / gönderme için aşağıdaki match bloğu ve create/update/delete
+//    kuralları gerekir. Koleksiyon adı tam olarak friendRequests olmalı.
 //
 // Not: setDoc() bazen mevcut belgeyi değiştirdiğinde kurallarda "update" olarak değerlendirilir;
 // bu yüzden friendRequests için yalnızca create açık bırakılmış sıkı kurallar bazen başarısız olur.
@@ -20,8 +25,29 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    /**
+     * B, A’dan gelen pending isteği onaylarken `users/A` belgesine kendi uid’sini friends’e ekler.
+     * İstek belgesi: friendRequests/{fromUid}_{toUid}. Yalnızca friends + updatedAt alanları değişebilir.
+     */
+    function acceptFriendWritesOtherUserDoc(senderUid) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/friendRequests/$(senderUid + '_' + request.auth.uid))
+        && get(/databases/$(database)/documents/friendRequests/$(senderUid + '_' + request.auth.uid)).data.status
+          == 'pending'
+        && get(/databases/$(database)/documents/friendRequests/$(senderUid + '_' + request.auth.uid)).data.fromUid
+          == senderUid
+        && get(/databases/$(database)/documents/friendRequests/$(senderUid + '_' + request.auth.uid)).data.toUid
+          == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['friends', 'updatedAt']);
+    }
+
     match /users/{userId} {
-      allow read, write: if signedIn();
+      // Okuma: arkadaş keşfi (sorgu + başka uid profili). Yazma: kendi belgen veya yukarıdaki onay senaryosu.
+      allow read: if signedIn();
+      allow create: if signedIn() && request.auth.uid == userId;
+      allow update: if signedIn()
+        && (request.auth.uid == userId || acceptFriendWritesOtherUserDoc(userId));
+      allow delete: if signedIn() && request.auth.uid == userId;
     }
 
     match /trips/{tripId} {
@@ -29,6 +55,14 @@ service cloud.firestore {
 
       match /comments/{commentId} {
         allow read, write: if signedIn();
+      }
+
+      /** Rota anketleri — katılımcı oyları (belge: trips/{tripId}/polls/{pollId}/votes/{uid}) */
+      match /polls/{pollId} {
+        allow read, write: if signedIn();
+        match /votes/{voteUid} {
+          allow read, write: if signedIn();
+        }
       }
     }
 
@@ -45,6 +79,7 @@ service cloud.firestore {
     }
 
     // Uygulama kodu: collection(db, 'friendRequests')
+    // Sorgu: where fromUid + toUid + status (onay/iptal) — Firebase konsolda bileşik indeks gerekebilir.
     match /friendRequests/{requestId} {
       allow read: if signedIn();
       // İstek oluşturan gerçekten giriş yapmış kullanıcı olmalı
@@ -57,8 +92,62 @@ service cloud.firestore {
       allow read, write: if signedIn();
     }
 
+    /** Grup üyelik olayları — oluşturan actorUid; yalnızca alıcı okuyup okundu işaretler */
+    match /groupNotifications/{notifId} {
+      allow read: if signedIn() && resource.data.toUid == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.actorUid == request.auth.uid
+        && request.resource.data.toUid is string
+        && request.resource.data.groupId is string
+        && request.resource.data.read == false;
+      allow update: if signedIn() && resource.data.toUid == request.auth.uid;
+      allow delete: if false;
+    }
+
+    /** Rota üyelik — eklendin / biri katıldı / biri ayrıldı; oluşturan actorUid; alıcı okur ve okundu işaretler */
+    match /tripMembershipNotifications/{notifId} {
+      allow read: if signedIn() && resource.data.toUid == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.actorUid == request.auth.uid
+        && request.resource.data.toUid is string
+        && request.resource.data.tripId is string
+        && request.resource.data.read == false;
+      allow update: if signedIn() && resource.data.toUid == request.auth.uid;
+      allow delete: if false;
+    }
+
+    /**
+     * Keşfet topluluk anketi — oluşturan + invitedUserIds içindekiler oy verir.
+     * Oylar: discoverPolls/{pollId}/votes/{uid}
+     * Sorgu indeksi: (createdBy, createdAt desc) ve (invitedUserIds array-contains, createdAt desc)
+     */
+    match /discoverPolls/{pollId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.createdBy == request.auth.uid;
+      allow update: if signedIn();
+      /** Oy dağılımı (kim kime oy verdi) için tüm oylar okunabilir; yazma yalnızca kendi belgen. */
+      match /votes/{voteUid} {
+        allow read: if signedIn();
+        allow create, update: if signedIn() && request.auth.uid == voteUid;
+        allow delete: if false;
+      }
+    }
+
+    /** Anket daveti — alıcı zilde görür; oluşturan bildirim yazar */
+    match /discoverPollInvites/{inviteId} {
+      allow read: if signedIn() && resource.data.toUid == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.fromUid == request.auth.uid;
+      allow update: if signedIn() && resource.data.toUid == request.auth.uid;
+      allow delete: if false;
+    }
+
     match /tripProposals/{proposalId} {
       allow read, write: if signedIn();
+    }
+
+    /** Uygulama içi okundu rozeti — yalnızca kendi belgen */
+    match /userActivityRead/{userId} {
+      allow read, write: if signedIn() && request.auth.uid == userId;
     }
   }
 }

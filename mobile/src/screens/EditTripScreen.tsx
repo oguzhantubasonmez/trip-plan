@@ -6,6 +6,7 @@ import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
 import { TextField } from '../components/TextField';
 import { TimePickerField } from '../components/TimePickerField';
+import { auth } from '../lib/firebase';
 import { getTrip, updateTripDetails } from '../services/trips';
 import { useAppTheme } from '../ThemeContext';
 import type { AppTheme } from '../theme';
@@ -94,13 +95,17 @@ export function EditTripScreen(props: {
     }
     setSaving(true);
     try {
-      await updateTripDetails(props.tripId, {
-        title: trimmed,
-        startDate: toISODate(startDate),
-        endDate: toISODate(endDate),
-        startTime: startTime.trim() ? st ?? null : null,
-        endTime: endTime.trim() ? et ?? null : null,
-      });
+      await updateTripDetails(
+        props.tripId,
+        {
+          title: trimmed,
+          startDate: toISODate(startDate),
+          endDate: toISODate(endDate),
+          startTime: startTime.trim() ? st ?? null : null,
+          endTime: endTime.trim() ? et ?? null : null,
+        },
+        auth.currentUser?.uid
+      );
       props.onDone();
     } catch (e: any) {
       setError(e?.message || 'Kaydedilemedi.');

@@ -3,8 +3,9 @@ import {
   signInWithEmailAndPassword,
   updateProfile,
 } from 'firebase/auth';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -13,6 +14,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppLogo } from '../components/AppLogo';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
@@ -45,7 +47,10 @@ function mapAuthError(e: unknown): string {
 
 export function AuthScreen() {
   const appTheme = useAppTheme();
+  const insets = useSafeAreaInsets();
+  const scrollRef = useRef<ScrollView>(null);
   const styles = useMemo(() => createAuthStyles(appTheme), [appTheme]);
+  const [androidKeyboardHeight, setAndroidKeyboardHeight] = useState(0);
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [countryCode] = useState('+90');
   const [displayName, setDisplayName] = useState('');
@@ -54,6 +59,25 @@ export function AuthScreen() {
   const [phone, setPhone] = useState('');
   const [error, setError] = useState<string | undefined>();
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const show = Keyboard.addListener('keyboardDidShow', (e) => {
+      setAndroidKeyboardHeight(e.endCoordinates?.height ?? 0);
+    });
+    const hide = Keyboard.addListener('keyboardDidHide', () => setAndroidKeyboardHeight(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
+  function nudgeScrollForPasswordField() {
+    if (Platform.OS !== 'android') return;
+    requestAnimationFrame(() => {
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 140);
+    });
+  }
 
   async function submit() {
     setError(undefined);
@@ -111,16 +135,25 @@ export function AuthScreen() {
     }
   }
 
+  const scrollBottomPad =
+    appTheme.space.xxl +
+    Math.max(insets.bottom, appTheme.space.sm) +
+    (Platform.OS === 'android' ? androidKeyboardHeight : 0);
+
   return (
     <Screen>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1 }}
+        enabled={Platform.OS === 'ios'}
+        keyboardVerticalOffset={0}
+        style={styles.kavRoot}
       >
         <ScrollView
+          ref={scrollRef}
+          style={styles.scrollView}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scroll}
+          contentContainerStyle={[styles.scroll, { paddingBottom: scrollBottomPad }]}
         >
           <View style={styles.header}>
             <AppLogo size={88} />
@@ -187,6 +220,7 @@ export function AuthScreen() {
               secureTextEntry
               autoCapitalize="none"
               autoCorrect={false}
+              onFocus={nudgeScrollForPasswordField}
             />
 
             {mode === 'register' ? (
@@ -205,6 +239,7 @@ export function AuthScreen() {
                       onChangeText={setPhone}
                       helperText="Rehber eşleştirmesi için; doğrulama SMS’i yok."
                       maxLength={15}
+                      onFocus={nudgeScrollForPasswordField}
                     />
                   </View>
                 </View>
@@ -228,6 +263,8 @@ export function AuthScreen() {
 
 function createAuthStyles(t: AppTheme) {
   return StyleSheet.create({
+    kavRoot: { flex: 1, width: '100%' },
+    scrollView: { flex: 1 },
     scroll: { flexGrow: 1, paddingBottom: t.space.xxl },
     header: { gap: 8, marginBottom: t.space.md, alignItems: 'center' },
     title: {

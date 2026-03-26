@@ -1,6 +1,7 @@
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   query,
   serverTimestamp,
@@ -9,6 +10,7 @@ import {
   type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { bumpTripCommentActivity } from './trips';
 import type { Comment } from '../types/comment';
 
 /** Kök koleksiyon — durak yorumları + eski rota yorumları (tripId ile). */
@@ -53,6 +55,13 @@ export async function addComment(params: {
     message: params.message.trim(),
     timestamp: serverTimestamp(),
   });
+  try {
+    const stopSnap = await getDoc(doc(db, 'stops', params.stopId));
+    const tid = stopSnap.data()?.tripId;
+    if (typeof tid === 'string' && tid.trim()) void bumpTripCommentActivity(tid.trim());
+  } catch {
+    /* yok */
+  }
   return ref.id;
 }
 
@@ -88,6 +97,7 @@ export async function addTripComment(params: {
   const subDoc = { commentId: subRef.id, ...payload };
   try {
     await setDoc(subRef, subDoc);
+    void bumpTripCommentActivity(tid);
     return subRef.id;
   } catch (e: unknown) {
     if (firestoreErrorCode(e) !== 'permission-denied') throw e;
@@ -95,6 +105,7 @@ export async function addTripComment(params: {
 
   const rootRef = doc(collection(db, COMMENTS));
   await setDoc(rootRef, { commentId: rootRef.id, ...payload });
+  void bumpTripCommentActivity(tid);
   return rootRef.id;
 }
 

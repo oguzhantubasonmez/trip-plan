@@ -17,7 +17,7 @@ type ThemeContextValue = {
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [mode, setModeState] = useState<ThemeMode>('light');
+  const [mode, setModeState] = useState<ThemeMode>('dark');
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
@@ -56,7 +56,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 export function useAppTheme(): AppTheme {
   const ctx = useContext(ThemeContext);
   if (!ctx) {
-    return lightTheme;
+    return darkTheme;
   }
   return ctx.theme;
 }
@@ -64,7 +64,7 @@ export function useAppTheme(): AppTheme {
 export function useThemeMode(): Pick<ThemeContextValue, 'mode' | 'setMode'> {
   const ctx = useContext(ThemeContext);
   if (!ctx) {
-    return { mode: 'light', setMode: () => {} };
+    return { mode: 'dark', setMode: () => {} };
   }
   return { mode: ctx.mode, setMode: ctx.setMode };
 }

@@ -1,6 +1,9 @@
 export type AttendeeRole = 'admin' | 'editor' | 'viewer';
 export type RsvpStatus = 'going' | 'maybe' | 'declined';
 
+/** Rota yaşam döngüsü — yeni rota varsayılan: planned */
+export type TripPlanStatus = 'planned' | 'in_progress' | 'completed';
+
 export type TripAttendee = {
   uid: string;
   role: AttendeeRole;
@@ -33,6 +36,10 @@ export type Trip = {
   /** Yakıt fiyatı TL/L (rota özeti için) */
   fuelPricePerLiter?: number;
   attendees: TripAttendee[];
+  /** Plan durumu — oluşturulunca planned */
+  planStatus: TripPlanStatus;
+  /** Son yorum aktivitesi (uygulama içi okunmamış özeti için) */
+  commentActivityAt?: any;
   createdAt?: any;
   updatedAt?: any;
 };

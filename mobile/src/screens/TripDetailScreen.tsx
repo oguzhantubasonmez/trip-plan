@@ -1,6 +1,6 @@
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { CommonActions, useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Clipboard from 'expo-clipboard';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
@@ -15,16 +15,21 @@ import {
   Text,
   TextInput,
   View,
+  type ViewStyle,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { AddPlaceModal } from '../components/AddPlaceModal';
 import { DeleteStopConfirmModal } from '../components/DeleteStopConfirmModal';
+import { RemoveTripAttendeeConfirmModal } from '../components/RemoveTripAttendeeConfirmModal';
 import { CollapsibleSection } from '../components/CollapsibleSection';
+import { PollVoteNamesModal } from '../components/PollVoteNamesModal';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
+import { TripPlanStatusChip } from '../components/TripPlanStatusChip';
 import { StopCard } from '../components/StopCard';
 import { TextField } from '../components/TextField';
 import { auth } from '../lib/firebase';
-import { getGroupsForUser } from '../services/groups';
+import { listGroupsVisibleToUser } from '../services/groups';
 import { getUserProfile } from '../services/userProfile';
 import {
   approveProposal,
@@ -40,27 +45,40 @@ import {
   getStopsForTrip,
   getTrip,
   recalculateLegsForTrip,
+  removeAttendeeByAdmin,
   repairAttendeeIdsFromAttendeesIfAdmin,
   reorderStops,
   updateAttendeeRsvp,
   updateStopFromPayload,
   updateStopStatus,
   updateTripDistanceAndFuel,
+  updateTripPlanStatus,
   updateTripVehiclePlanning,
 } from '../services/trips';
+import { markTripCommentsRead } from '../services/activityInbox';
+import { buildStopWeatherPeekLine, fetchWeatherForStops, type DayWeatherSnapshot } from '../services/weather';
 import {
   addTripComment,
   getCommentsForTripReliable,
   normalizeTripIdForComments,
 } from '../services/comments';
+import { listTripPollVoters } from '../services/pollVoters';
+import {
+  createTripPoll,
+  listTripPollsWithVotes,
+  voteTripPoll,
+} from '../services/tripPolls';
 import type { Group } from '../types/group';
 import type { Comment } from '../types/comment';
-import type { Stop as StopType, Trip } from '../types/trip';
+import type { DiscoverPollState } from '../types/discover';
+import { POLL_MAX_OPTIONS, POLL_MIN_OPTIONS } from '../utils/pollFirestore';
+import type { Stop as StopType, Trip, TripAttendee } from '../types/trip';
 import type { EditStopPayload, TripProposal } from '../types/tripProposal';
 import type { ExpenseType, UserProfile } from '../services/userProfile';
 import { useAppTheme, useThemeMode } from '../ThemeContext';
 import type { AppTheme } from '../theme';
-import type { RootStackParamList } from '../navigation/types';
+import type { HomeStackParamList } from '../navigation/types';
+import { nextTripPlanStatus } from '../utils/tripPlanStatus';
 import {
   effectiveStopYmd,
   formatTripDayTr,
@@ -92,6 +110,8 @@ function formatTripCommentTime(ts: any): string {
 export function TripDetailScreen(props: {
   tripId: string;
   openAddPlace?: boolean;
+  /** Bildirimden açılınca Yorumlar bölümü açık */
+  focusComments?: boolean;
   onBack: () => void;
 }) {
   const [trip, setTrip] = useState<Trip | null>(null);
@@ -101,6 +121,9 @@ export function TripDetailScreen(props: {
   const [error, setError] = useState<string | null>(null);
   const [relocateStopId, setRelocateStopId] = useState<string | null>(null);
   const [addAttendeeModal, setAddAttendeeModal] = useState(false);
+  const [removeAttendeeTarget, setRemoveAttendeeTarget] = useState<TripAttendee | null>(null);
+  const [removeAttendeeBusy, setRemoveAttendeeBusy] = useState(false);
+  const [removeAttendeeError, setRemoveAttendeeError] = useState<string | null>(null);
   const [friendUids, setFriendUids] = useState<string[]>([]);
   const [selectedRole, setSelectedRole] = useState<'editor' | 'viewer'>('editor');
   const [distanceInput, setDistanceInput] = useState('');
@@ -121,9 +144,32 @@ export function TripDetailScreen(props: {
   const [planExtraBreakdownOpen, setPlanExtraBreakdownOpen] = useState(false);
   const [deleteStopTarget, setDeleteStopTarget] = useState<StopType | null>(null);
   const [deleteStopBusy, setDeleteStopBusy] = useState(false);
+  /** Plan günü (YYYY-MM-DD) → true ise o günün durakları açık; varsayılan kapalı */
+  const [expandedStopDayYmd, setExpandedStopDayYmd] = useState<Record<string, boolean>>({});
   const [tripComments, setTripComments] = useState<Comment[]>([]);
   const [tripCommentDraft, setTripCommentDraft] = useState('');
   const [postingTripComment, setPostingTripComment] = useState(false);
+  const [stopWeatherByStopId, setStopWeatherByStopId] = useState<Map<string, DayWeatherSnapshot>>(
+    () => new Map()
+  );
+  const [tripPolls, setTripPolls] = useState<DiscoverPollState[]>([]);
+  const [pollVoteBusyId, setPollVoteBusyId] = useState<string | null>(null);
+  const [pollModalVisible, setPollModalVisible] = useState(false);
+  const [pollQuestionDraft, setPollQuestionDraft] = useState('');
+  const [pollOptionDrafts, setPollOptionDrafts] = useState<string[]>(() => ['', '']);
+  const [pollCreating, setPollCreating] = useState(false);
+  const [planStatusBusy, setPlanStatusBusy] = useState(false);
+  const [commentsSectionOpen, setCommentsSectionOpen] = useState(() => Boolean(props.focusComments));
+  const [tripPollTip, setTripPollTip] = useState<{
+    pollId: string;
+    optionIndex: number;
+    letter: string;
+    optionText: string;
+  } | null>(null);
+  const [tripPollTipNames, setTripPollTipNames] = useState<string[]>([]);
+  const [tripPollTipLoading, setTripPollTipLoading] = useState(false);
+  const [tripPollTipError, setTripPollTipError] = useState<string | null>(null);
+  const tripPollTipHoverRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentUid = auth.currentUser?.uid;
   const appTheme = useAppTheme();
   const { mode } = useThemeMode();
@@ -132,7 +178,68 @@ export function TripDetailScreen(props: {
     if (mode === 'dark') return ['#0B1524', '#132A42', '#1B3654'];
     return ['#C8E8F7', '#E2F3FB', '#FFF4E8'];
   }, [mode]);
-  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  function tripPollBarGradient(i: number): [string, string] {
+    const pairs: [string, string][] = [
+      appTheme.primaryButtonGradient as [string, string],
+      appTheme.accentButtonGradient as [string, string],
+      [appTheme.color.ocean, appTheme.color.primary],
+      [appTheme.color.accentTeal, appTheme.color.accent],
+      [appTheme.color.accentPurple, appTheme.color.accentPink],
+      [appTheme.color.sand, appTheme.color.accent],
+      [appTheme.color.primaryDark, appTheme.color.ocean],
+      [appTheme.color.danger, appTheme.color.accent],
+    ];
+    return pairs[i % pairs.length];
+  }
+  const navigation = useNavigation<NativeStackNavigationProp<HomeStackParamList>>();
+
+  const stopWeatherDeps = useMemo(
+    () =>
+      stops
+        .map(
+          (s) =>
+            `${s.stopId}:${s.coords?.latitude ?? ''}:${s.coords?.longitude ?? ''}:${s.stopDate ?? ''}`
+        )
+        .join('|'),
+    [stops]
+  );
+
+  useEffect(() => {
+    if (!trip || stops.length === 0) {
+      setStopWeatherByStopId(new Map());
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const map = await fetchWeatherForStops(stops, trip.startDate);
+        if (!cancelled) setStopWeatherByStopId(map);
+      } catch {
+        if (!cancelled) setStopWeatherByStopId(new Map());
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [trip?.tripId, trip?.startDate, stopWeatherDeps]);
+
+  useEffect(() => {
+    if (props.focusComments) setCommentsSectionOpen(true);
+  }, [props.focusComments]);
+
+  const stopWeatherPeekLineByStopId = useMemo(() => {
+    if (!trip) return new Map<string, string>();
+    const m = new Map<string, string>();
+    for (const s of stops) {
+      const line = buildStopWeatherPeekLine({
+        stop: s,
+        tripStartDate: trip.startDate,
+        snapshot: stopWeatherByStopId.get(s.stopId),
+      });
+      if (line) m.set(s.stopId, line);
+    }
+    return m;
+  }, [trip, stops, stopWeatherByStopId]);
 
   const inviteUrl =
     Platform.OS === 'web' && typeof window !== 'undefined'
@@ -152,6 +259,7 @@ export function TripDetailScreen(props: {
         setTrip(null);
         setStops([]);
         setTripComments([]);
+        setTripPolls([]);
         setError(e?.message || 'Rota yüklenemedi.');
         return;
       }
@@ -160,6 +268,7 @@ export function TripDetailScreen(props: {
       if (!t) {
         setStops([]);
         setTripComments([]);
+        setTripPolls([]);
         if (currentUid) {
           try {
             const me = await getUserProfile(currentUid);
@@ -213,6 +322,14 @@ export function TripDetailScreen(props: {
         sideErrors.push(e?.message || 'Öneriler yüklenemedi.');
       }
 
+      try {
+        const rows = await listTripPollsWithVotes(props.tripId, currentUid ?? undefined);
+        setTripPolls(rows);
+      } catch (e: any) {
+        setTripPolls([]);
+        sideErrors.push(e?.message || 'Anketler yüklenemedi.');
+      }
+
       setVehicleLabelInput(t.vehicleLabel ?? '');
       const meForTrip = currentUid ? await getUserProfile(currentUid) : null;
       const cons =
@@ -251,7 +368,7 @@ export function TripDetailScreen(props: {
         try {
           const [me, groupList] = await Promise.all([
             getUserProfile(currentUid),
-            getGroupsForUser(currentUid),
+            listGroupsVisibleToUser(currentUid),
           ]);
           setFriendUids(me?.friends ?? []);
           setGroups(groupList);
@@ -287,6 +404,52 @@ export function TripDetailScreen(props: {
       load();
     }, [load])
   );
+
+  const openRemoveAttendeeModal = useCallback(
+    (att: TripAttendee) => {
+      if (!trip || currentUid !== trip.adminId) return;
+      if (att.uid === currentUid || att.uid === trip.adminId) return;
+      setRemoveAttendeeError(null);
+      setRemoveAttendeeTarget(att);
+    },
+    [trip, currentUid]
+  );
+
+  const closeRemoveAttendeeModal = useCallback(() => {
+    if (removeAttendeeBusy) return;
+    setRemoveAttendeeTarget(null);
+    setRemoveAttendeeError(null);
+  }, [removeAttendeeBusy]);
+
+  const confirmRemoveAttendee = useCallback(async () => {
+    if (!currentUid || !trip || !removeAttendeeTarget) return;
+    if (trip.adminId !== currentUid) return;
+    setRemoveAttendeeBusy(true);
+    setRemoveAttendeeError(null);
+    try {
+      await removeAttendeeByAdmin({
+        tripId: props.tripId,
+        targetUid: removeAttendeeTarget.uid,
+        actorUid: currentUid,
+      });
+      setRemoveAttendeeTarget(null);
+      await load();
+    } catch (e: any) {
+      setRemoveAttendeeError(e?.message || 'Çıkarılamadı.');
+    } finally {
+      setRemoveAttendeeBusy(false);
+    }
+  }, [currentUid, trip, removeAttendeeTarget, props.tripId, load]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (currentUid && props.tripId) void markTripCommentsRead(currentUid, props.tripId);
+    }, [currentUid, props.tripId])
+  );
+
+  useEffect(() => {
+    setExpandedStopDayYmd({});
+  }, [props.tripId]);
 
   const friendsNotInTrip = useMemo(() => {
     if (!trip || !currentUid) return [];
@@ -365,22 +528,31 @@ export function TripDetailScreen(props: {
     [stops, trip?.startDate]
   );
 
-  const stopsWithDayHeaders = useMemo(() => {
+  const stopDayGroups = useMemo(() => {
     const start = trip?.startDate ?? '';
-    const out: { stop: StopType; showDayHeader: boolean; dayLabel: string }[] = [];
-    let prev = '';
-    for (const s of routeOrderedStops) {
+    const groups: {
+      dayYmd: string;
+      dayLabel: string;
+      entries: { stop: StopType; routeIndex: number }[];
+    }[] = [];
+    routeOrderedStops.forEach((s, routeIndex) => {
       const dk = effectiveStopYmd(s, start);
-      const show = dk !== prev;
-      prev = dk;
-      out.push({
-        stop: s,
-        showDayHeader: show,
-        dayLabel: formatTripDayTr(dk) || dk,
-      });
-    }
-    return out;
+      const label = formatTripDayTr(dk) || dk;
+      const last = groups[groups.length - 1];
+      if (!last || last.dayYmd !== dk) {
+        groups.push({ dayYmd: dk, dayLabel: label, entries: [] });
+      }
+      groups[groups.length - 1].entries.push({ stop: s, routeIndex });
+    });
+    return groups;
   }, [routeOrderedStops, trip?.startDate]);
+
+  const toggleStopDaySection = useCallback((dayYmd: string) => {
+    setExpandedStopDayYmd((prev) => {
+      const open = prev[dayYmd] === true;
+      return { ...prev, [dayYmd]: !open };
+    });
+  }, []);
 
   const defaultNewStopDay = useMemo(() => {
     if (!trip?.startDate?.trim()) return '';
@@ -432,11 +604,15 @@ export function TripDetailScreen(props: {
               : null,
         };
         if (isTripAdmin) {
-          await updateStopFromPayload(relocating, {
-            locationName: params.locationName,
-            coords: params.coords,
-            ...ratingPayload,
-          });
+          await updateStopFromPayload(
+            relocating,
+            {
+              locationName: params.locationName,
+              coords: params.coords,
+              ...ratingPayload,
+            },
+            currentUid
+          );
           await recalculateLegsForTrip(props.tripId);
         } else if (canPropose) {
           await handleProposeChange(relocating, {
@@ -470,10 +646,7 @@ export function TripDetailScreen(props: {
       });
       const merged = await getStopsForTrip(props.tripId);
       const sorted = sortStopsByRoute(merged, trip.startDate ?? '');
-      await reorderStops(
-        props.tripId,
-        sorted.map((s) => s.stopId)
-      );
+      await reorderStops(props.tripId, sorted.map((s) => s.stopId), currentUid);
       try {
         await recalculateLegsForTrip(props.tripId);
       } catch (e: any) {
@@ -489,7 +662,7 @@ export function TripDetailScreen(props: {
     if (trip?.adminId !== currentUid) return;
     const next = stop.status === 'approved' ? 'pending' : 'approved';
     try {
-      await updateStopStatus(stop.stopId, next);
+      await updateStopStatus(stop.stopId, next, currentUid);
       await load();
     } catch (_) {}
   }
@@ -503,7 +676,7 @@ export function TripDetailScreen(props: {
     if (swap < 0 || swap >= newOrder.length) return;
     [newOrder[index], newOrder[swap]] = [newOrder[swap], newOrder[index]];
     try {
-      await reorderStops(props.tripId, newOrder.map((s) => s.stopId));
+      await reorderStops(props.tripId, newOrder.map((s) => s.stopId), currentUid);
       try {
         await recalculateLegsForTrip(props.tripId);
       } catch (e: any) {
@@ -527,10 +700,7 @@ export function TripDetailScreen(props: {
       await deleteStop(stop.stopId);
       const rest = await getStopsForTrip(props.tripId);
       if (rest.length > 0) {
-        await reorderStops(
-          props.tripId,
-          rest.map((s) => s.stopId)
-        );
+        await reorderStops(props.tripId, rest.map((s) => s.stopId), currentUid);
       }
       try {
         await recalculateLegsForTrip(props.tripId);
@@ -564,7 +734,7 @@ export function TripDetailScreen(props: {
 
   async function handleAddAttendee(uid: string) {
     try {
-      await addAttendeeToTrip(props.tripId, uid, selectedRole);
+      await addAttendeeToTrip(props.tripId, uid, selectedRole, currentUid ?? undefined);
       setAddAttendeeModal(false);
       await load();
     } catch (e: any) {
@@ -580,7 +750,7 @@ export function TripDetailScreen(props: {
     setAddingGroupId(group.groupId);
     try {
       for (const uid of toAdd) {
-        await addAttendeeToTrip(props.tripId, uid, selectedRole);
+        await addAttendeeToTrip(props.tripId, uid, selectedRole, currentUid ?? undefined);
       }
       await load();
     } catch (e: any) {
@@ -593,7 +763,7 @@ export function TripDetailScreen(props: {
   async function handleSetRsvp(rsvp: 'going' | 'maybe' | 'declined') {
     if (!currentUid) return;
     try {
-      await updateAttendeeRsvp(props.tripId, currentUid, rsvp);
+      await updateAttendeeRsvp(props.tripId, currentUid, rsvp, currentUid);
       await load();
     } catch (_) {}
   }
@@ -611,7 +781,7 @@ export function TripDetailScreen(props: {
   async function handleApproveProposal(proposalId: string) {
     setProposalBusy(proposalId);
     try {
-      await approveProposal(proposalId);
+      await approveProposal(proposalId, currentUid ?? undefined);
       try {
         await recalculateLegsForTrip(props.tripId);
       } catch (e: any) {
@@ -654,26 +824,35 @@ export function TripDetailScreen(props: {
     }
   }
 
+  async function performDeleteTrip() {
+    try {
+      await deleteTrip(props.tripId);
+      setError(null);
+      navigation.dispatch(
+        CommonActions.reset({
+          index: 0,
+          routes: [{ name: 'Home' }],
+        })
+      );
+    } catch (e: any) {
+      setError(e?.message || 'Rota silinemedi.');
+    }
+  }
+
   function confirmDeleteTrip() {
-    Alert.alert(
-      'Rotayı sil',
-      'Bu rota ve tüm durakları kalıcı olarak silinir. Katılımcılar da erişemez. Emin misin?',
-      [
-        { text: 'İptal', style: 'cancel' },
-        {
-          text: 'Sil',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await deleteTrip(props.tripId);
-              navigation.navigate('Home');
-            } catch (e: any) {
-              setError(e?.message || 'Rota silinemedi.');
-            }
-          },
-        },
-      ]
-    );
+    const title = 'Rotayı sil';
+    const message =
+      'Bu rota ve tüm durakları kalıcı olarak silinir. Katılımcılar da erişemez. Emin misin?';
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm(`${title}\n\n${message}`)) {
+        void performDeleteTrip();
+      }
+      return;
+    }
+    Alert.alert(title, message, [
+      { text: 'İptal', style: 'cancel' },
+      { text: 'Sil', style: 'destructive', onPress: () => void performDeleteTrip() },
+    ]);
   }
 
   async function handleSaveVehicleAndFuel() {
@@ -696,13 +875,17 @@ export function TripDetailScreen(props: {
     setSavingVehicle(true);
     setSavingCost(true);
     try {
-      await updateTripVehiclePlanning(props.tripId, {
-        vehicleLabel: vehicleLabelInput.trim() || undefined,
-        tripConsumptionLPer100km: !isNaN(consumption) ? consumption : undefined,
-        fuelPricePerLiter: !isNaN(fuelPrice) ? fuelPrice : undefined,
-        totalDistance: dist,
-        totalFuelCost: Math.round(totalFuelCost * 100) / 100,
-      });
+      await updateTripVehiclePlanning(
+        props.tripId,
+        {
+          vehicleLabel: vehicleLabelInput.trim() || undefined,
+          tripConsumptionLPer100km: !isNaN(consumption) ? consumption : undefined,
+          fuelPricePerLiter: !isNaN(fuelPrice) ? fuelPrice : undefined,
+          totalDistance: dist,
+          totalFuelCost: Math.round(totalFuelCost * 100) / 100,
+        },
+        currentUid ?? undefined
+      );
       await load();
     } finally {
       setSavingVehicle(false);
@@ -811,6 +994,24 @@ export function TripDetailScreen(props: {
     currentUid && trip.attendees.some((a) => a.uid === currentUid)
   );
 
+  async function handleCycleTripPlanStatus() {
+    if (!currentUid || !isTripParticipant || !trip) return;
+    const t = trip;
+    const current = t.planStatus;
+    const next = nextTripPlanStatus(current);
+    setPlanStatusBusy(true);
+    setError(null);
+    setTrip({ ...t, planStatus: next });
+    try {
+      await updateTripPlanStatus(props.tripId, next, currentUid);
+    } catch (e: any) {
+      setTrip({ ...t, planStatus: current });
+      setError(e?.message || 'Durum güncellenemedi.');
+    } finally {
+      setPlanStatusBusy(false);
+    }
+  }
+
   async function handlePostTripComment() {
     if (!currentUid || !isTripParticipant) return;
     const text = tripCommentDraft.trim();
@@ -855,14 +1056,122 @@ export function TripDetailScreen(props: {
     }
   }
 
+  async function handleVoteTripPoll(pollId: string, choiceId: string) {
+    if (!currentUid || !isTripParticipant || pollVoteBusyId) return;
+    const row = tripPolls.find((p) => p.pollId === pollId);
+    if (!row || row.userChoice) return;
+    setPollVoteBusyId(pollId);
+    setError(null);
+    try {
+      await voteTripPoll(props.tripId, pollId, currentUid, choiceId);
+      setTripPolls((prev) =>
+        prev.map((p) => {
+          if (p.pollId !== pollId) return p;
+          return {
+            ...p,
+            options: p.options.map((o) =>
+              o.id === choiceId ? { ...o, count: o.count + 1 } : o
+            ),
+            userChoice: choiceId,
+            totalVotes: p.options.reduce((s, o) => s + (o.id === choiceId ? o.count + 1 : o.count), 0),
+          };
+        })
+      );
+    } catch (e: any) {
+      setError(e?.message || 'Oy kullanılamadı. Firestore’da trips/.../polls kurallarını yayınladığından emin ol.');
+    } finally {
+      setPollVoteBusyId(null);
+    }
+  }
+
+  function clearTripPollTipHoverTimer() {
+    if (tripPollTipHoverRef.current) {
+      clearTimeout(tripPollTipHoverRef.current);
+      tripPollTipHoverRef.current = null;
+    }
+  }
+
+  async function openTripPollVoteTooltip(params: {
+    pollId: string;
+    optionIndex: number;
+    letter: string;
+    optionText: string;
+    optionCount: number;
+  }) {
+    if (!currentUid || !isTripParticipant) return;
+    setTripPollTip({
+      pollId: params.pollId,
+      optionIndex: params.optionIndex,
+      letter: params.letter,
+      optionText: params.optionText,
+    });
+    setTripPollTipLoading(true);
+    setTripPollTipError(null);
+    setTripPollTipNames([]);
+    try {
+      const all = await listTripPollVoters(
+        props.tripId,
+        params.pollId,
+        currentUid,
+        params.optionCount
+      );
+      const names = all
+        .filter((r) => r.choiceIndex === params.optionIndex)
+        .map((r) => r.displayName);
+      setTripPollTipNames(names);
+    } catch (e: any) {
+      setTripPollTipError(e?.message || 'Oy listesi yüklenemedi.');
+    } finally {
+      setTripPollTipLoading(false);
+    }
+  }
+
+  async function handleCreateTripPoll() {
+    if (!currentUid || !canAddStops) return;
+    setPollCreating(true);
+    setError(null);
+    try {
+      await createTripPoll({
+        tripId: props.tripId,
+        createdBy: currentUid,
+        question: pollQuestionDraft,
+        optionTexts: pollOptionDrafts,
+      });
+      setPollModalVisible(false);
+      setPollQuestionDraft('');
+      setPollOptionDrafts(['', '']);
+      await load();
+    } catch (e: any) {
+      setError(e?.message || 'Anket oluşturulamadı.');
+    } finally {
+      setPollCreating(false);
+    }
+  }
+
+  const canSubmitTripPoll =
+    pollQuestionDraft.trim().length >= 2 &&
+    pollOptionDrafts.filter((x) => String(x ?? '').trim().length > 0).length >= POLL_MIN_OPTIONS;
+
   return (
     <Screen>
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-        removeClippedSubviews={Platform.OS === 'android' ? false : undefined}
-      >
+      <View style={styles.tripScreenBody}>
+        <ScrollView
+          style={[
+            { flex: 1 },
+            Platform.OS === 'web'
+              ? ({
+                  scrollbarWidth: 'none',
+                  msOverflowStyle: 'none',
+                } as ViewStyle)
+              : null,
+          ]}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          removeClippedSubviews={Platform.OS === 'android' ? false : undefined}
+          showsVerticalScrollIndicator={false}
+          showsHorizontalScrollIndicator={false}
+          {...(Platform.OS === 'web' ? { nativeID: 'rw-scroll-trip-detail' } : {})}
+        >
         <View style={styles.header}>
           <Pressable onPress={props.onBack} style={styles.backRow}>
             <Text style={styles.backText}>‹ Geri</Text>
@@ -891,17 +1200,41 @@ export function TripDetailScreen(props: {
               </>
             );
           })()}
+          <View style={styles.tripPlanStatusHeader}>
+            <TripPlanStatusChip
+              status={trip.planStatus}
+              interactive={isTripParticipant}
+              busy={planStatusBusy}
+              onPressCycle={() => void handleCycleTripPlanStatus()}
+            />
+          </View>
           {isAdmin && (
-            <View style={styles.adminTripActions}>
-              <View style={styles.adminTripBtnHalf}>
-                <PrimaryButton
-                  title="✏️ Düzenle"
-                  onPress={() => navigation.navigate('EditTrip', { tripId: props.tripId })}
-                />
-              </View>
-              <View style={styles.adminTripBtnHalf}>
-                <PrimaryButton title="🗑️ Sil" variant="danger" onPress={confirmDeleteTrip} />
-              </View>
+            <View style={styles.adminTripToolbar}>
+              <Pressable
+                onPress={() => navigation.navigate('EditTrip', { tripId: props.tripId })}
+                style={({ pressed }) => [
+                  styles.adminToolbarBtn,
+                  pressed && { opacity: 0.88 },
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel="Rotayı düzenle"
+              >
+                <Ionicons name="create-outline" size={18} color={appTheme.color.primaryDark} />
+                <Text style={styles.adminToolbarBtnLabel}>Düzenle</Text>
+              </Pressable>
+              <Pressable
+                onPress={confirmDeleteTrip}
+                style={({ pressed }) => [
+                  styles.adminToolbarBtn,
+                  styles.adminToolbarBtnDanger,
+                  pressed && { opacity: 0.88 },
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel="Rotayı sil"
+              >
+                <Ionicons name="trash-outline" size={18} color={appTheme.color.danger} />
+                <Text style={[styles.adminToolbarBtnLabel, styles.adminToolbarBtnLabelDanger]}>Sil</Text>
+              </Pressable>
             </View>
           )}
         </View>
@@ -933,30 +1266,45 @@ export function TripDetailScreen(props: {
               <Text style={styles.inviteBtnText}>Paylaş</Text>
             </Pressable>
           </View>
-          {trip.attendees.map((a) => (
-            <View key={a.uid} style={styles.attendeeRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.attendeeName}>{displayName(a.uid)}</Text>
-                <Text style={styles.attendeeMeta}>
-                  {a.role === 'admin' ? 'Admin' : a.role === 'editor' ? 'Editör' : 'İzleyici'}
-                  {a.rsvp ? ` · ${RSVP_LABELS[a.rsvp] ?? a.rsvp}` : ''}
-                </Text>
-              </View>
-              {a.uid === currentUid && (
-                <View style={styles.rsvpRow}>
-                  {(['going', 'maybe', 'declined'] as const).map((r) => (
-                    <Pressable
-                      key={r}
-                      onPress={() => handleSetRsvp(r)}
-                      style={[styles.rsvpBtn, a.rsvp === r ? styles.rsvpBtnActive : null]}
-                    >
-                      <Text style={styles.rsvpBtnText}>{RSVP_LABELS[r]}</Text>
-                    </Pressable>
-                  ))}
+          {trip.attendees.map((a) => {
+            const removable = isAdmin && a.uid !== currentUid && a.uid !== trip.adminId;
+            return (
+              <Pressable
+                key={a.uid}
+                style={({ pressed }) => [
+                  styles.attendeeRow,
+                  removable && pressed ? { opacity: 0.92 } : null,
+                ]}
+                onLongPress={removable ? () => openRemoveAttendeeModal(a) : undefined}
+                delayLongPress={480}
+                accessibilityHint={removable ? 'Yönetici: uzun basarak rotadan çıkar' : undefined}
+              >
+                <View style={styles.attendeeIdentity}>
+                  <Text style={styles.attendeeName}>{displayName(a.uid)}</Text>
+                  <Text style={styles.attendeeMeta}>
+                    {a.role === 'admin' ? 'Admin' : a.role === 'editor' ? 'Editör' : 'İzleyici'}
+                    {a.rsvp ? ` · ${RSVP_LABELS[a.rsvp] ?? a.rsvp}` : ''}
+                  </Text>
+                  {removable ? (
+                    <Text style={styles.attendeeAdminHint}>Yönetici: uzun bas · rotadan çıkar</Text>
+                  ) : null}
                 </View>
-              )}
-            </View>
-          ))}
+                {a.uid === currentUid ? (
+                  <View style={styles.rsvpRow}>
+                    {(['going', 'maybe', 'declined'] as const).map((r) => (
+                      <Pressable
+                        key={r}
+                        onPress={() => handleSetRsvp(r)}
+                        style={[styles.rsvpBtn, a.rsvp === r ? styles.rsvpBtnActive : null]}
+                      >
+                        <Text style={styles.rsvpBtnText}>{RSVP_LABELS[r]}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : null}
+              </Pressable>
+            );
+          })}
         </CollapsibleSection>
 
         <CollapsibleSection
@@ -1160,102 +1508,160 @@ export function TripDetailScreen(props: {
             ) : null
           }
         >
-          {canAddStops ? (
-            <View style={styles.mapAddRow}>
-              <PrimaryButton
-                title="📍 Durak ekle"
-                variant="accent"
-                onPress={() => setAddPlaceModalVisible(true)}
-              />
-            </View>
-          ) : (
+          {!canAddStops ? (
             <Text style={styles.mutedCompact}>
               İzleyici olarak durak ekleyemezsin. Notlarını aşağıdaki «Yorumlar» bölümünden paylaşabilirsin.
             </Text>
-          )}
+          ) : null}
           {stops.length === 0 ? (
             <View style={styles.empty}>
-              <Text style={styles.muted}>Henüz durak yok. Yukarıdan yer arayarak ekleyebilirsin.</Text>
+              <Text style={styles.muted}>
+                {canAddStops
+                  ? 'Henüz durak yok. Aşağıdaki buton veya üstteki «+ Durak» ile yer arayıp ekleyebilirsin.'
+                  : 'Henüz durak yok. Durakları rota sahibi veya editör ekleyebilir.'}
+              </Text>
+              {canAddStops ? (
+                <>
+                  <View style={{ height: appTheme.space.md }} />
+                  <PrimaryButton title="+ Durak ekle" onPress={() => setAddPlaceModalVisible(true)} />
+                </>
+              ) : null}
             </View>
           ) : (
             <>
-              {stopsWithDayHeaders.map(({ stop: item, showDayHeader, dayLabel }, index) => (
-                <View key={item.stopId}>
-                  {showDayHeader ? (
-                    <Text
-                      style={[styles.stopDayHeader, index === 0 ? styles.stopDayHeaderFirst : null]}
+              {stopDayGroups.map((group, gIdx) => {
+                const dayOpen = expandedStopDayYmd[group.dayYmd] === true;
+                const tripStart = trip.startDate ?? '';
+                return (
+                  <View key={group.dayYmd}>
+                    <Pressable
+                      onPress={() => toggleStopDaySection(group.dayYmd)}
+                      style={({ pressed }) => [
+                        styles.stopDayHeaderRow,
+                        gIdx === 0 ? styles.stopDayHeaderFirst : null,
+                        pressed && { opacity: 0.92 },
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityState={{ expanded: dayOpen }}
+                      accessibilityLabel={`${group.dayLabel}, ${
+                        group.entries.length === 1 ? '1 durak' : `${group.entries.length} durak`
+                      }`}
                     >
-                      {dayLabel}
-                    </Text>
-                  ) : null}
-                  <View style={styles.stopChainBlock}>
-                    <View style={styles.stopBlock}>
-                      <View style={styles.stopRow}>
-                        {isAdmin && (
-                          <View style={styles.orderBtns}>
-                            <Pressable
-                              onPress={() => handleMoveStop(index, 'up')}
-                              disabled={index === 0}
-                              style={[styles.orderBtn, index === 0 && styles.orderBtnDisabled]}
-                            >
-                              <Text style={styles.orderBtnText}>↑</Text>
-                            </Pressable>
-                            <Pressable
-                              onPress={() => handleMoveStop(index, 'down')}
-                              disabled={index === routeOrderedStops.length - 1}
-                              style={[
-                                styles.orderBtn,
-                                index === routeOrderedStops.length - 1 && styles.orderBtnDisabled,
-                              ]}
-                            >
-                              <Text style={styles.orderBtnText}>↓</Text>
-                            </Pressable>
-                          </View>
-                        )}
-                        <View style={{ flex: 1, minWidth: 0 }}>
-                          <StopCard
-                            stop={item}
-                            stopIndex={index}
-                            tripStartDate={trip.startDate}
-                            tripEndDate={trip.endDate || trip.startDate}
-                            expenseTypes={myExpenseTypes}
-                            isAdmin={isAdmin}
-                            canProposeChanges={editorCanPropose}
-                            currentUid={currentUid}
-                            userProfiles={userProfiles}
-                            displayName={displayName}
-                            onToggleStatus={() => handleToggleStopStatus(item)}
-                            onRefresh={load}
-                            onProposeChange={
-                              editorCanPropose ? handleProposeChange : undefined
-                            }
-                            onRelocateWithSearch={
-                              isAdmin || editorCanPropose
-                                ? () => setRelocateStopId(item.stopId)
-                                : undefined
-                            }
-                            onLongPressDelete={
-                              isAdmin ? () => openDeleteStopModal(item) : undefined
-                            }
-                            onOpenProfileForExpenseTypes={
-                              isAdmin || editorCanPropose
-                                ? () => navigation.navigate('Profile')
-                                : undefined
-                            }
-                          />
-                        </View>
+                      <Text style={styles.stopDayHeaderChevron}>{dayOpen ? '▼' : '▶'}</Text>
+                      <View style={styles.stopDayHeaderTextCol}>
+                        <Text style={styles.stopDayHeaderTitle}>{group.dayLabel}</Text>
+                        <Text style={styles.stopDayHeaderCount}>
+                          {group.entries.length === 1 ? '1 durak' : `${group.entries.length} durak`}
+                        </Text>
                       </View>
-                    </View>
-                    {index < routeOrderedStops.length - 1 ? (
-                      <View style={styles.stopRouteLink} pointerEvents="none">
-                        <View style={styles.stopRouteLinkBar} />
-                        <Text style={styles.stopRouteLinkArrow}>↓</Text>
-                        <View style={styles.stopRouteLinkBar} />
-                      </View>
-                    ) : null}
+                    </Pressable>
+                    {dayOpen
+                      ? group.entries.map(({ stop: item, routeIndex: index }) => {
+                          const nextIdx = index + 1;
+                          const showRouteLink =
+                            nextIdx < routeOrderedStops.length &&
+                            expandedStopDayYmd[
+                              effectiveStopYmd(routeOrderedStops[nextIdx], tripStart)
+                            ] === true;
+                          return (
+                            <View key={item.stopId}>
+                              <View style={styles.stopChainBlock}>
+                                <View style={styles.stopBlock}>
+                                  <View style={styles.stopRow}>
+                                    {isAdmin && (
+                                      <View style={styles.orderBtns}>
+                                        <Pressable
+                                          onPress={() => handleMoveStop(index, 'up')}
+                                          disabled={index === 0}
+                                          style={[
+                                            styles.orderBtn,
+                                            index === 0 && styles.orderBtnDisabled,
+                                          ]}
+                                        >
+                                          <Text style={styles.orderBtnText}>↑</Text>
+                                        </Pressable>
+                                        <Pressable
+                                          onPress={() => handleMoveStop(index, 'down')}
+                                          disabled={index === routeOrderedStops.length - 1}
+                                          style={[
+                                            styles.orderBtn,
+                                            index === routeOrderedStops.length - 1 &&
+                                              styles.orderBtnDisabled,
+                                          ]}
+                                        >
+                                          <Text style={styles.orderBtnText}>↓</Text>
+                                        </Pressable>
+                                      </View>
+                                    )}
+                                    <View style={{ flex: 1, minWidth: 0 }}>
+                                      <StopCard
+                                        stop={item}
+                                        stopIndex={index}
+                                        tripStartDate={trip.startDate}
+                                        tripEndDate={trip.endDate || trip.startDate}
+                                        expenseTypes={myExpenseTypes}
+                                        isAdmin={isAdmin}
+                                        canProposeChanges={editorCanPropose}
+                                        currentUid={currentUid}
+                                        userProfiles={userProfiles}
+                                        displayName={displayName}
+                                        onToggleStatus={() => handleToggleStopStatus(item)}
+                                        onRefresh={load}
+                                        onProposeChange={
+                                          editorCanPropose ? handleProposeChange : undefined
+                                        }
+                                        onRelocateWithSearch={
+                                          isAdmin || editorCanPropose
+                                            ? () => setRelocateStopId(item.stopId)
+                                            : undefined
+                                        }
+                                        onLongPressDelete={
+                                          isAdmin ? () => openDeleteStopModal(item) : undefined
+                                        }
+                                        onOpenProfileForExpenseTypes={
+                                          isAdmin || editorCanPropose
+                                            ? () =>
+                                                navigation
+                                                  .getParent()
+                                                  ?.navigate('ProfileTab', { screen: 'Profile' })
+                                            : undefined
+                                        }
+                                        weatherPeekLine={stopWeatherPeekLineByStopId.get(
+                                          item.stopId
+                                        )}
+                                      />
+                                    </View>
+                                  </View>
+                                </View>
+                                {showRouteLink ? (
+                                  <View style={styles.stopRouteLink} pointerEvents="none">
+                                    <View style={styles.stopRouteLinkBar} />
+                                    <Text style={styles.stopRouteLinkArrow}>↓</Text>
+                                    <View style={styles.stopRouteLinkBar} />
+                                  </View>
+                                ) : null}
+                              </View>
+                            </View>
+                          );
+                        })
+                      : null}
                   </View>
-                </View>
-              ))}
+                );
+              })}
+              {canAddStops ? (
+                <Pressable
+                  onPress={() => setAddPlaceModalVisible(true)}
+                  style={({ pressed }) => [
+                    styles.addStopListFooter,
+                    pressed && { opacity: 0.92 },
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Listenin sonuna durak ekle"
+                >
+                  <Ionicons name="add-circle-outline" size={22} color={appTheme.color.primaryDark} />
+                  <Text style={styles.addStopListFooterText}>Durak ekle</Text>
+                </Pressable>
+              ) : null}
             </>
           )}
         </CollapsibleSection>
@@ -1290,7 +1696,8 @@ export function TripDetailScreen(props: {
           collapsedSummary={
             tripComments.length === 0 ? 'Henüz yorum yok' : `${tripComments.length} yorum`
           }
-          defaultOpen={false}
+          open={commentsSectionOpen}
+          onOpenChange={setCommentsSectionOpen}
           compact
           smallTitle
           containerStyle={[styles.section, styles.chatSectionShell]}
@@ -1382,7 +1789,162 @@ export function TripDetailScreen(props: {
             )}
           </LinearGradient>
         </CollapsibleSection>
-      </ScrollView>
+
+        <CollapsibleSection
+          title="Anketler"
+          collapsedSummary={
+            tripPolls.length === 0 ? 'Henüz anket yok' : `${tripPolls.length} anket`
+          }
+          defaultOpen={false}
+          compact
+          smallTitle
+          containerStyle={styles.section}
+          headerRight={
+            canAddStops ? (
+              <Pressable
+                onPress={() => {
+                  setPollOptionDrafts(['', '']);
+                  setPollModalVisible(true);
+                }}
+                style={styles.linkBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Yeni anket"
+              >
+                <Text style={styles.linkBtnText}>+ Anket</Text>
+              </Pressable>
+            ) : null
+          }
+        >
+          {tripPolls.length === 0 ? (
+            <View style={{ gap: appTheme.space.sm }}>
+              <Text style={styles.mutedCompact}>
+                Katılımcılar {POLL_MIN_OPTIONS}–{POLL_MAX_OPTIONS} seçenekli anket oluşturup oy toplayabilir. Herkes
+                en fazla bir kez oy verir.
+              </Text>
+              {canAddStops ? (
+                <PrimaryButton
+                  title="İlk anketi oluştur"
+                  onPress={() => {
+                    setPollOptionDrafts(['', '']);
+                    setPollModalVisible(true);
+                  }}
+                />
+              ) : null}
+            </View>
+          ) : (
+            tripPolls.map((poll, pollIndex) => {
+              const total = poll.totalVotes;
+              const busy = pollVoteBusyId === poll.pollId;
+              const showVoteButtons = Boolean(
+                currentUid && isTripParticipant && !poll.userChoice
+              );
+              const isLastPoll = pollIndex === tripPolls.length - 1;
+              return (
+                <View
+                  key={poll.pollId}
+                  style={[
+                    styles.tripPollCard,
+                    isLastPoll ? styles.tripPollCardLast : null,
+                  ]}
+                >
+                  <Text style={styles.tripPollQ}>{poll.question}</Text>
+                  {poll.options.map((opt, optIdx) => {
+                    const pct = total > 0 ? Math.round((opt.count / total) * 1000) / 10 : 50;
+                    const letter = String.fromCharCode(65 + optIdx);
+                    return (
+                      <View key={opt.id} style={styles.tripPollOptBlock}>
+                        <View style={styles.tripPollOptHeaderRow}>
+                          <Text
+                            style={[styles.tripPollOptLabel, styles.tripPollOptLabelFlex]}
+                            numberOfLines={4}
+                          >
+                            {opt.text}
+                          </Text>
+                          {currentUid && isTripParticipant ? (
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={`${letter} şıkkını kim seçti`}
+                              accessibilityHint="Bu şıkkı seçenlerin isimlerini gösterir"
+                              hitSlop={10}
+                              onPress={() =>
+                                void openTripPollVoteTooltip({
+                                  pollId: poll.pollId,
+                                  optionIndex: optIdx,
+                                  letter,
+                                  optionText: opt.text,
+                                  optionCount: poll.options.length,
+                                })
+                              }
+                              onHoverIn={
+                                Platform.OS === 'web'
+                                  ? () => {
+                                      clearTripPollTipHoverTimer();
+                                      tripPollTipHoverRef.current = setTimeout(() => {
+                                        tripPollTipHoverRef.current = null;
+                                        void openTripPollVoteTooltip({
+                                          pollId: poll.pollId,
+                                          optionIndex: optIdx,
+                                          letter,
+                                          optionText: opt.text,
+                                          optionCount: poll.options.length,
+                                        });
+                                      }, 420);
+                                    }
+                                  : undefined
+                              }
+                              onHoverOut={
+                                Platform.OS === 'web' ? () => clearTripPollTipHoverTimer() : undefined
+                              }
+                              style={({ pressed }) => [
+                                styles.tripPollInfoBtn,
+                                pressed && { opacity: 0.75 },
+                              ]}
+                            >
+                              <Text style={styles.tripPollInfoMark}>ⓘ</Text>
+                            </Pressable>
+                          ) : null}
+                        </View>
+                        <View style={styles.tripPollBarTrack}>
+                          <LinearGradient
+                            colors={tripPollBarGradient(optIdx)}
+                            start={{ x: 0, y: 0.5 }}
+                            end={{ x: 1, y: 0.5 }}
+                            style={[styles.tripPollBarFill, { width: `${pct}%` }]}
+                          />
+                        </View>
+                        {showVoteButtons ? (
+                          <Pressable
+                            onPress={() => void handleVoteTripPoll(poll.pollId, opt.id)}
+                            disabled={busy}
+                            style={({ pressed }) => [
+                              styles.tripPollVoteBtn,
+                              pressed && { opacity: 0.9 },
+                            ]}
+                          >
+                            <Text style={styles.tripPollVoteBtnText}>
+                              {busy ? '…' : `${letter} şıkkına oy ver`}
+                            </Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    );
+                  })}
+                  <Text style={styles.tripPollMeta}>
+                    {poll.totalVotes} oy
+                    {poll.userChoice ? ' · Sen de katıldın' : ''}
+                    {!currentUid
+                      ? ' · Oy vermek için giriş yap'
+                      : !isTripParticipant
+                        ? ' · Oy için rotaya katıl'
+                        : ''}
+                  </Text>
+                </View>
+              );
+            })
+          )}
+        </CollapsibleSection>
+        </ScrollView>
+      </View>
 
       <Modal
         visible={addAttendeeModal}
@@ -1461,6 +2023,73 @@ export function TripDetailScreen(props: {
         </Pressable>
       </Modal>
 
+      <Modal
+        visible={pollModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !pollCreating && setPollModalVisible(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => !pollCreating && setPollModalVisible(false)}
+        >
+          <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.modalTitle}>Yeni anket</Text>
+            <Text style={styles.mutedCompact}>
+              {POLL_MIN_OPTIONS}–{POLL_MAX_OPTIONS} seçenek; katılımcılar bir kez oy verir.
+            </Text>
+            <View style={{ height: appTheme.space.sm }} />
+            <TextField
+              label="Soru"
+              value={pollQuestionDraft}
+              onChangeText={setPollQuestionDraft}
+              placeholder="Örn. Cumartesi nerede buluşalım?"
+            />
+            {pollOptionDrafts.map((row, idx) => {
+              const letter = String.fromCharCode(65 + idx);
+              return (
+                <View key={`trip-poll-opt-${idx}`}>
+                  <View style={styles.fieldSpacer} />
+                  <TextField
+                    label={`${letter} şıkkı`}
+                    value={row}
+                    onChangeText={(v) =>
+                      setPollOptionDrafts((prev) => prev.map((p, i) => (i === idx ? v : p)))
+                    }
+                  />
+                </View>
+              );
+            })}
+            <View style={styles.tripPollDraftActions}>
+              {pollOptionDrafts.length < POLL_MAX_OPTIONS ? (
+                <Pressable onPress={() => setPollOptionDrafts((prev) => [...prev, ''])}>
+                  <Text style={styles.tripPollDraftLink}>+ Şık ekle</Text>
+                </Pressable>
+              ) : null}
+              {pollOptionDrafts.length > POLL_MIN_OPTIONS ? (
+                <Pressable onPress={() => setPollOptionDrafts((prev) => prev.slice(0, -1))}>
+                  <Text style={styles.tripPollDraftLinkMuted}>Son şıkkı kaldır</Text>
+                </Pressable>
+              ) : null}
+            </View>
+            <View style={{ height: appTheme.space.md }} />
+            <PrimaryButton
+              title={pollCreating ? 'Oluşturuluyor…' : 'Anketi oluştur'}
+              onPress={() => void handleCreateTripPoll()}
+              loading={pollCreating}
+              disabled={pollCreating || !canSubmitTripPoll}
+            />
+            <View style={{ height: appTheme.space.sm }} />
+            <PrimaryButton
+              title="İptal"
+              variant="outline"
+              onPress={() => setPollModalVisible(false)}
+              disabled={pollCreating}
+            />
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       <AddPlaceModal
         visible={addPlaceModalVisible || relocateStopId !== null}
         onClose={() => {
@@ -1483,15 +2112,63 @@ export function TripDetailScreen(props: {
         }}
         onConfirm={executeDeleteStop}
       />
+
+      <RemoveTripAttendeeConfirmModal
+        visible={removeAttendeeTarget !== null}
+        tripTitle={trip.title}
+        participantDisplayName={
+          removeAttendeeTarget ? displayName(removeAttendeeTarget.uid) : ''
+        }
+        busy={removeAttendeeBusy}
+        error={removeAttendeeError}
+        onClose={closeRemoveAttendeeModal}
+        onConfirmRemove={() => void confirmRemoveAttendee()}
+      />
+
+      <PollVoteNamesModal
+        visible={tripPollTip !== null}
+        onClose={() => {
+          clearTripPollTipHoverTimer();
+          setTripPollTip(null);
+          setTripPollTipNames([]);
+          setTripPollTipError(null);
+        }}
+        optionSummary={tripPollTip ? `${tripPollTip.letter} · ${tripPollTip.optionText}` : ''}
+        names={tripPollTipNames}
+        loading={tripPollTipLoading}
+        error={tripPollTipError}
+      />
     </Screen>
   );
 }
 
 function createTripDetailStyles(t: AppTheme) {
   return StyleSheet.create({
+    tripScreenBody: {
+      flex: 1,
+    },
     scrollContent: {
       paddingBottom: t.space.lg,
       paddingHorizontal: t.space.xs,
+    },
+    addStopListFooter: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      marginTop: t.space.md,
+      paddingVertical: 12,
+      paddingHorizontal: t.space.md,
+      borderRadius: t.radius.pill,
+      borderWidth: 1.5,
+      borderColor: t.color.primary,
+      backgroundColor: t.color.primarySoft,
+      alignSelf: 'stretch',
+    },
+    addStopListFooterText: {
+      color: t.color.primaryDark,
+      fontSize: t.font.small,
+      fontWeight: '800',
     },
     header: { gap: 4, marginBottom: t.space.sm },
     backRow: { alignSelf: 'flex-start', paddingVertical: 4, paddingHorizontal: 4 },
@@ -1506,15 +2183,40 @@ function createTripDetailStyles(t: AppTheme) {
       lineHeight: 20,
     },
     planTimes: { color: t.color.textSecondary, fontSize: t.font.tiny, fontWeight: '700', marginTop: 4 },
-    adminTripActions: {
+    tripPlanStatusHeader: {
+      alignItems: 'center',
       marginTop: t.space.sm,
-      alignSelf: 'stretch',
-      width: '100%',
-      maxWidth: 480,
+    },
+    adminTripToolbar: {
+      marginTop: t.space.sm,
+      alignSelf: 'flex-start',
       flexDirection: 'row',
+      alignItems: 'center',
       gap: 8,
     },
-    adminTripBtnHalf: { flex: 1, minWidth: 0 },
+    adminToolbarBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderRadius: t.radius.pill,
+      borderWidth: 1,
+      borderColor: t.color.border,
+      backgroundColor: t.color.inputBg,
+    },
+    adminToolbarBtnDanger: {
+      borderColor: 'rgba(239, 68, 68, 0.35)',
+      backgroundColor: 'rgba(239, 68, 68, 0.06)',
+    },
+    adminToolbarBtnLabel: {
+      color: t.color.primaryDark,
+      fontSize: t.font.tiny,
+      fontWeight: '800',
+    },
+    adminToolbarBtnLabelDanger: {
+      color: t.color.danger,
+    },
     section: {
       backgroundColor: t.color.surface,
       borderRadius: t.radius.lg,
@@ -1652,7 +2354,6 @@ function createTripDetailStyles(t: AppTheme) {
     approveBtnText: { color: t.color.text, fontSize: t.font.small, fontWeight: '700' },
     rejectBtn: { paddingHorizontal: 14, paddingVertical: 8 },
     rejectBtnText: { color: t.color.danger, fontSize: t.font.small, fontWeight: '700' },
-    mapAddRow: { marginTop: t.space.sm, marginBottom: t.space.xs },
     chatSectionShell: {
       overflow: 'hidden',
       borderColor: t.color.cardBorderPrimary,
@@ -1833,18 +2534,39 @@ function createTripDetailStyles(t: AppTheme) {
       lineHeight: 20,
       marginVertical: -1,
     },
-    stopDayHeader: {
-      color: t.color.primaryDark,
-      fontSize: t.font.small,
-      fontWeight: '900',
+    stopDayHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
       marginTop: t.space.sm,
-      marginBottom: 6,
-      paddingVertical: 4,
-      paddingHorizontal: 2,
-      borderBottomWidth: 2,
-      borderBottomColor: t.color.primarySoft,
+      marginBottom: 8,
+      paddingVertical: 8,
+      paddingHorizontal: 10,
+      borderRadius: t.radius.md,
+      backgroundColor: t.color.primarySoft,
+      borderWidth: 1,
+      borderColor: t.color.cardBorderPrimary,
     },
     stopDayHeaderFirst: { marginTop: 0 },
+    stopDayHeaderChevron: {
+      color: t.color.primaryDark,
+      fontSize: 12,
+      fontWeight: '900',
+      width: 18,
+      textAlign: 'center',
+    },
+    stopDayHeaderTextCol: { flex: 1, minWidth: 0 },
+    stopDayHeaderTitle: {
+      color: t.color.text,
+      fontSize: t.font.small,
+      fontWeight: '900',
+    },
+    stopDayHeaderCount: {
+      color: t.color.muted,
+      fontSize: t.font.tiny,
+      fontWeight: '700',
+      marginTop: 2,
+    },
     stopRow: { flexDirection: 'row', alignItems: 'flex-start', gap: t.space.sm },
     orderBtns: { flexDirection: 'column', gap: 2 },
     orderBtn: {
@@ -1857,9 +2579,28 @@ function createTripDetailStyles(t: AppTheme) {
     },
     orderBtnDisabled: { opacity: 0.4 },
     orderBtnText: { color: t.color.muted, fontSize: t.font.small, fontWeight: '700' },
-    attendeeRow: { paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: t.color.subtle },
+    attendeeRow: {
+      paddingVertical: 10,
+      borderBottomWidth: 1,
+      borderBottomColor: t.color.subtle,
+      width: '100%',
+      maxWidth: '100%',
+      alignSelf: 'stretch',
+    },
+    /** flex:1 kullanma — üst bölümde kalan dikey alanı yutup isim satırını / kartı şişiriyordu */
+    attendeeIdentity: {
+      width: '100%',
+      maxWidth: '100%',
+    },
     attendeeName: { color: t.color.text, fontSize: t.font.body, fontWeight: '700' },
     attendeeMeta: { color: t.color.muted, fontSize: t.font.small, marginTop: 2 },
+    attendeeAdminHint: {
+      color: t.color.textSecondary,
+      fontSize: t.font.tiny,
+      fontWeight: '700',
+      marginTop: 6,
+      letterSpacing: 0.2,
+    },
     rsvpRow: { flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' },
     rsvpBtn: {
       paddingHorizontal: 10,
@@ -1936,5 +2677,89 @@ function createTripDetailStyles(t: AppTheme) {
       borderColor: t.color.mapDashBorder,
     },
     mapContainer: { borderRadius: t.radius.lg, overflow: 'hidden', borderWidth: 2, borderColor: t.color.primarySoft },
+    tripPollCard: {
+      marginBottom: t.space.md,
+      paddingBottom: t.space.md,
+      borderBottomWidth: 1,
+      borderBottomColor: t.color.subtle,
+    },
+    tripPollCardLast: {
+      borderBottomWidth: 0,
+      marginBottom: 0,
+      paddingBottom: 0,
+    },
+    tripPollQ: {
+      color: t.color.text,
+      fontSize: t.font.body,
+      fontWeight: '800',
+      marginBottom: t.space.sm,
+      lineHeight: 22,
+    },
+    tripPollOptBlock: { marginBottom: t.space.sm },
+    tripPollOptHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 8,
+      marginBottom: 6,
+    },
+    tripPollOptLabelFlex: { flex: 1, minWidth: 0 },
+    tripPollOptLabel: {
+      color: t.color.textSecondary,
+      fontSize: t.font.tiny,
+      fontWeight: '700',
+    },
+    tripPollInfoBtn: {
+      padding: 4,
+      marginTop: -2,
+      borderRadius: t.radius.sm,
+    },
+    tripPollInfoMark: {
+      color: t.color.primaryDark,
+      fontSize: t.font.body,
+      fontWeight: '800',
+    },
+    tripPollBarTrack: {
+      height: 10,
+      borderRadius: t.radius.pill,
+      backgroundColor: t.color.inputBg,
+      overflow: 'hidden',
+      borderWidth: 1,
+      borderColor: t.color.border,
+    },
+    tripPollBarFill: {
+      height: '100%',
+      borderRadius: t.radius.pill,
+      minWidth: 4,
+    },
+    tripPollVoteBtn: {
+      marginTop: 8,
+      alignSelf: 'flex-start',
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      borderRadius: t.radius.pill,
+      backgroundColor: t.color.primarySoft,
+      borderWidth: 1,
+      borderColor: t.color.primary,
+    },
+    tripPollVoteBtnText: {
+      color: t.color.text,
+      fontSize: t.font.tiny,
+      fontWeight: '800',
+    },
+    tripPollMeta: {
+      marginTop: 4,
+      color: t.color.muted,
+      fontSize: t.font.tiny,
+      fontWeight: '600',
+      lineHeight: 18,
+    },
+    tripPollDraftActions: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: t.space.sm,
+      marginTop: t.space.sm,
+    },
+    tripPollDraftLink: { color: t.color.primaryDark, fontSize: t.font.small, fontWeight: '800' },
+    tripPollDraftLinkMuted: { color: t.color.muted, fontSize: t.font.small, fontWeight: '700' },
   });
 }

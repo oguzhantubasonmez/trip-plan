@@ -13,7 +13,12 @@ import {
 import { DatePickerField } from './DatePickerField';
 import { PrimaryButton } from './PrimaryButton';
 import { TextField } from './TextField';
-import { formatGooglePlaceRatingLine, getPlaceDetails, searchPlaces } from '../services/places';
+import {
+  getGooglePlaceRatingParts,
+  getPlaceDetails,
+  GOOGLE_PLACE_RATING_STAR_COLOR,
+  searchPlaces,
+} from '../services/places';
 import { parseTripYmd } from '../utils/tripSchedule';
 import type {
   PlaceDetails as PlaceDetailsType,
@@ -167,8 +172,8 @@ export function AddPlaceModal(props: Props) {
     }
   }
 
-  const selectedRatingLine = selected
-    ? formatGooglePlaceRatingLine(selected.rating, selected.userRatingsTotal)
+  const selectedRatingParts = selected
+    ? getGooglePlaceRatingParts(selected.rating, selected.userRatingsTotal)
     : null;
 
   const scrollBottomPad = appTheme.space.xl + 24 + keyboardBottomInset;
@@ -214,8 +219,11 @@ export function AddPlaceModal(props: Props) {
                   {selected.formattedAddress ? (
                     <Text style={styles.selectedAddr}>{selected.formattedAddress}</Text>
                   ) : null}
-                  {selectedRatingLine ? (
-                    <Text style={styles.ratingLine}>{selectedRatingLine}</Text>
+                  {selectedRatingParts ? (
+                    <Text style={styles.ratingLine}>
+                      <Text style={styles.ratingStar}>★</Text>
+                      <Text>{` ${selectedRatingParts.valueText}`}</Text>
+                    </Text>
                   ) : null}
                   {pickDate && range ? (
                     <>
@@ -329,6 +337,7 @@ function createAddPlaceStyles(t: AppTheme) {
       fontWeight: '800',
       marginTop: 6,
     },
+    ratingStar: { color: GOOGLE_PLACE_RATING_STAR_COLOR, fontWeight: '800' },
     changeBtn: { marginTop: t.space.sm, alignSelf: 'flex-start' },
     changeBtnText: { color: t.color.primary, fontSize: t.font.small, fontWeight: '700' },
   });
