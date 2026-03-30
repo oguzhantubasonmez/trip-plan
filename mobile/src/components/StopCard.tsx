@@ -51,6 +51,8 @@ type Props = {
   onOpenProfileForExpenseTypes?: () => void;
   /** Plan günü + konum için günlük hava özeti (Open-Meteo) */
   weatherPeekLine?: string;
+  /** Hava satırına dokununca 16 günlük tahmin (konum varsa) */
+  onWeatherPeekPress?: () => void;
 };
 
 type PeekLineAccent =
@@ -459,15 +461,31 @@ export function StopCard(props: Props) {
             {peekLines.length > 0 ? (
               peekLines.map((item, i) =>
                 item.kind === 'text' ? (
-                  <Text
-                    key={i}
-                    style={[
-                      styles.peekLine,
-                      peekAccentStyle[item.accent ?? 'default'],
-                    ]}
-                  >
-                    {item.text}
-                  </Text>
+                  item.accent === 'weather' && props.onWeatherPeekPress ? (
+                    <Pressable
+                      key={i}
+                      onPress={props.onWeatherPeekPress}
+                      hitSlop={{ top: 6, bottom: 6, left: 0, right: 0 }}
+                      accessibilityRole="button"
+                      accessibilityLabel="16 günlük hava tahmini"
+                    >
+                      <Text
+                        style={[styles.peekLine, peekAccentStyle[item.accent ?? 'default']]}
+                      >
+                        {item.text}
+                      </Text>
+                    </Pressable>
+                  ) : (
+                    <Text
+                      key={i}
+                      style={[
+                        styles.peekLine,
+                        peekAccentStyle[item.accent ?? 'default'],
+                      ]}
+                    >
+                      {item.text}
+                    </Text>
+                  )
                 ) : (
                   <Text key={i} style={[styles.peekLine, styles.peekRatingRow]}>
                     <Text style={styles.ratingStar}>★</Text>
@@ -529,7 +547,13 @@ export function StopCard(props: Props) {
             <Text style={styles.stayLine}>Bu durakta kalış: ~{stayMinutes} dk</Text>
           )}
           {props.weatherPeekLine?.trim() ? (
-            <Text style={styles.weatherLine}>{props.weatherPeekLine.trim()}</Text>
+            props.onWeatherPeekPress ? (
+              <Pressable onPress={props.onWeatherPeekPress} accessibilityRole="button">
+                <Text style={styles.weatherLine}>{props.weatherPeekLine.trim()}</Text>
+              </Pressable>
+            ) : (
+              <Text style={styles.weatherLine}>{props.weatherPeekLine.trim()}</Text>
+            )
           ) : null}
 
           {showEditFields ? (

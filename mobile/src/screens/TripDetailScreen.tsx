@@ -5,7 +5,6 @@ import * as Clipboard from 'expo-clipboard';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
   ActivityIndicator,
-  Alert,
   Modal,
   Platform,
   Pressable,
@@ -20,6 +19,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { AddPlaceModal } from '../components/AddPlaceModal';
 import { DeleteStopConfirmModal } from '../components/DeleteStopConfirmModal';
+import { DeleteTripConfirmModal } from '../components/DeleteTripConfirmModal';
 import { RemoveTripAttendeeConfirmModal } from '../components/RemoveTripAttendeeConfirmModal';
 import { CollapsibleSection } from '../components/CollapsibleSection';
 import { PollVoteNamesModal } from '../components/PollVoteNamesModal';
@@ -85,6 +85,7 @@ import {
   formatTripScheduleSummary,
   sortStopsByRoute,
 } from '../utils/tripSchedule';
+import { buildTripInviteShareMessage, buildTripInviteUrl } from '../utils/tripInviteLink';
 import { normalizeStopExtraExpenses, stopExtraTotal } from '../utils/stopExpenses';
 
 const RSVP_LABELS: Record<string, string> = {
@@ -144,6 +145,9 @@ export function TripDetailScreen(props: {
   const [planExtraBreakdownOpen, setPlanExtraBreakdownOpen] = useState(false);
   const [deleteStopTarget, setDeleteStopTarget] = useState<StopType | null>(null);
   const [deleteStopBusy, setDeleteStopBusy] = useState(false);
+  const [deleteTripConfirmOpen, setDeleteTripConfirmOpen] = useState(false);
+  const [deleteTripBusy, setDeleteTripBusy] = useState(false);
+  const [deleteTripModalError, setDeleteTripModalError] = useState<string | null>(null);
   /** Plan günü (YYYY-MM-DD) → true ise o günün durakları açık; varsayılan kapalı */
   const [expandedStopDayYmd, setExpandedStopDayYmd] = useState<Record<string, boolean>>({});
   const [tripComments, setTripComments] = useState<Comment[]>([]);
@@ -241,10 +245,7 @@ export function TripDetailScreen(props: {
     return m;
   }, [trip, stops, stopWeatherByStopId]);
 
-  const inviteUrl =
-    Platform.OS === 'web' && typeof window !== 'undefined'
-      ? `${window.location.origin}${window.location.pathname || '/'}?invite=${props.tripId}`
-      : `https://trip-plan.invite/${props.tripId}`;
+  const inviteUrl = useMemo(() => buildTripInviteUrl(props.tripId), [props.tripId]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -717,17 +718,21 @@ export function TripDetailScreen(props: {
   }
 
   async function handleCopyInviteLink() {
+    if (!inviteUrl) return;
     await Clipboard.setStringAsync(inviteUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
 
   async function handleShareInvite() {
+    if (!inviteUrl) return;
     try {
+      const title = trip?.title ?? 'Rota daveti';
+      const message = buildTripInviteShareMessage(trip?.title ?? 'Rota', inviteUrl);
       await Share.share({
-        title: trip?.title ?? 'Rota daveti',
-        message: `${trip?.title ?? 'Rota'} daveti: ${inviteUrl}`,
-        url: inviteUrl,
+        title,
+        message,
+        ...(Platform.OS === 'ios' ? { url: inviteUrl } : {}),
       });
     } catch (_) {}
   }
@@ -825,9 +830,12 @@ export function TripDetailScreen(props: {
   }
 
   async function performDeleteTrip() {
+    setDeleteTripBusy(true);
+    setDeleteTripModalError(null);
     try {
       await deleteTrip(props.tripId);
       setError(null);
+      setDeleteTripConfirmOpen(false);
       navigation.dispatch(
         CommonActions.reset({
           index: 0,
@@ -835,24 +843,21 @@ export function TripDetailScreen(props: {
         })
       );
     } catch (e: any) {
-      setError(e?.message || 'Rota silinemedi.');
+      setDeleteTripModalError(e?.message || 'Rota silinemedi.');
+    } finally {
+      setDeleteTripBusy(false);
     }
   }
 
   function confirmDeleteTrip() {
-    const title = 'Rotayı sil';
-    const message =
-      'Bu rota ve tüm durakları kalıcı olarak silinir. Katılımcılar da erişemez. Emin misin?';
-    if (Platform.OS === 'web') {
-      if (typeof window !== 'undefined' && window.confirm(`${title}\n\n${message}`)) {
-        void performDeleteTrip();
-      }
-      return;
-    }
-    Alert.alert(title, message, [
-      { text: 'İptal', style: 'cancel' },
-      { text: 'Sil', style: 'destructive', onPress: () => void performDeleteTrip() },
-    ]);
+    setDeleteTripModalError(null);
+    setDeleteTripConfirmOpen(true);
+  }
+
+  function closeDeleteTripModal() {
+    if (deleteTripBusy) return;
+    setDeleteTripConfirmOpen(false);
+    setDeleteTripModalError(null);
   }
 
   async function handleSaveVehicleAndFuel() {
@@ -1208,6 +1213,17 @@ export function TripDetailScreen(props: {
               onPressCycle={() => void handleCycleTripPlanStatus()}
             />
           </View>
+          {isTripParticipant && currentUid ? (
+            <Pressable
+              onPress={() => navigation.navigate('CopyTrip', { sourceTripId: props.tripId })}
+              style={({ pressed }) => [styles.copyTripBtn, pressed && { opacity: 0.88 }]}
+              accessibilityRole="button"
+              accessibilityLabel="Rota kopyala"
+            >
+              <Ionicons name="copy-outline" size={18} color={appTheme.color.primaryDark} />
+              <Text style={styles.copyTripBtnLabel}>Rota kopyala</Text>
+            </Pressable>
+          ) : null}
           {isAdmin && (
             <View style={styles.adminTripToolbar}>
               <Pressable
@@ -1257,15 +1273,20 @@ export function TripDetailScreen(props: {
           }
         >
           <View style={styles.inviteRow}>
-            <Pressable onPress={handleCopyInviteLink} style={styles.inviteBtn}>
+            <Pressable onPress={handleCopyInviteLink} style={styles.inviteBtn} disabled={!inviteUrl}>
               <Text style={styles.inviteBtnText}>
                 {copied ? 'Kopyalandı!' : 'Davet linkini kopyala'}
               </Text>
             </Pressable>
-            <Pressable onPress={handleShareInvite} style={styles.inviteBtn}>
-              <Text style={styles.inviteBtnText}>Paylaş</Text>
+            <Pressable onPress={handleShareInvite} style={styles.inviteBtn} disabled={!inviteUrl}>
+              <Text style={styles.inviteBtnText}>Rota paylaş</Text>
             </Pressable>
           </View>
+          <Text style={styles.inviteHint}>
+            {Platform.OS === 'web'
+              ? 'Bağlantıyı gönder; alıcı aynı adreste açınca davet ekranı gelir.'
+              : 'Bağlantıyı gönder; RouteWise yüklü cihazda dokununca uygulama açılır, onaylayınca rotaya eklenecekler.'}
+          </Text>
           {trip.attendees.map((a) => {
             const removable = isAdmin && a.uid !== currentUid && a.uid !== trip.adminId;
             return (
@@ -1629,6 +1650,17 @@ export function TripDetailScreen(props: {
                                         weatherPeekLine={stopWeatherPeekLineByStopId.get(
                                           item.stopId
                                         )}
+                                        onWeatherPeekPress={
+                                          item.coords?.latitude != null &&
+                                          item.coords?.longitude != null
+                                            ? () =>
+                                                navigation.navigate('WeatherForecast', {
+                                                  latitude: item.coords!.latitude,
+                                                  longitude: item.coords!.longitude,
+                                                  label: item.locationName,
+                                                })
+                                            : undefined
+                                        }
                                       />
                                     </View>
                                   </View>
@@ -2113,6 +2145,15 @@ export function TripDetailScreen(props: {
         onConfirm={executeDeleteStop}
       />
 
+      <DeleteTripConfirmModal
+        visible={deleteTripConfirmOpen}
+        tripTitle={trip.title}
+        busy={deleteTripBusy}
+        error={deleteTripModalError}
+        onClose={closeDeleteTripModal}
+        onConfirmDelete={() => void performDeleteTrip()}
+      />
+
       <RemoveTripAttendeeConfirmModal
         visible={removeAttendeeTarget !== null}
         tripTitle={trip.title}
@@ -2186,6 +2227,24 @@ function createTripDetailStyles(t: AppTheme) {
     tripPlanStatusHeader: {
       alignItems: 'center',
       marginTop: t.space.sm,
+    },
+    copyTripBtn: {
+      marginTop: t.space.sm,
+      alignSelf: 'center',
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      borderRadius: t.radius.pill,
+      borderWidth: 1,
+      borderColor: t.color.primary,
+      backgroundColor: t.color.primarySoft,
+    },
+    copyTripBtnLabel: {
+      color: t.color.primaryDark,
+      fontSize: t.font.small,
+      fontWeight: '800',
     },
     adminTripToolbar: {
       marginTop: t.space.sm,
@@ -2511,6 +2570,12 @@ function createTripDetailStyles(t: AppTheme) {
       backgroundColor: t.color.inputBg,
     },
     inviteBtnText: { color: t.color.primary, fontSize: t.font.small, fontWeight: '700' },
+    inviteHint: {
+      color: t.color.muted,
+      fontSize: t.font.tiny,
+      lineHeight: 18,
+      marginBottom: t.space.sm,
+    },
     addRow: { flexDirection: 'row', alignItems: 'flex-end', marginBottom: t.space.sm },
     empty: { paddingVertical: t.space.lg },
     stopChainBlock: { marginBottom: 0 },

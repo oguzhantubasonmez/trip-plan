@@ -47,6 +47,11 @@ export function HomeScreen(props: {
   onOpenTrip: (tripId: string, opts?: { focusComments?: boolean }) => void;
   onOpenFriends: () => void;
   onOpenGroup: (groupId: string) => void;
+  onOpenWeatherForecast?: (params?: {
+    latitude?: number;
+    longitude?: number;
+    label?: string;
+  }) => void;
 }) {
   const navigation = useNavigation<HomeScreenNav>();
   const theme = useAppTheme();
@@ -368,7 +373,7 @@ export function HomeScreen(props: {
             maxWidth: '100%',
           }}
         >
-          <HomeWeatherCard />
+          <HomeWeatherCard onOpenForecast={props.onOpenWeatherForecast} />
 
           <LinearGradient
             colors={heroGrad}

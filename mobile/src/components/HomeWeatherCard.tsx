@@ -7,7 +7,10 @@ import type { AppTheme } from '../theme';
 
 type Phase = 'loading' | 'need_permission' | 'ready' | 'error' | 'unavailable';
 
-export function HomeWeatherCard() {
+export function HomeWeatherCard(props: {
+  /** Anlık hava kartına dokununca 16 günlük tahmin ekranı */
+  onOpenForecast?: () => void;
+}) {
   const theme = useAppTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
   const [phase, setPhase] = useState<Phase>('loading');
@@ -97,22 +100,35 @@ export function HomeWeatherCard() {
   const wind =
     data.windKmh != null && data.windKmh > 0 ? ` · Rüzgâr ~${Math.round(data.windKmh)} km/s` : '';
 
-  return (
-    <View style={styles.card}>
-      <View style={styles.row}>
-        <Text style={styles.emoji}>{data.emoji}</Text>
-        <View style={styles.body}>
-          <Text style={styles.mainLine}>
-            Şu an <Text style={styles.temp}>{temp}°C</Text>
-            {' · '}
-            {data.labelTr}
-            {wind}
-          </Text>
-          <Text style={styles.source}>Kaynak: Open-Meteo </Text>
-        </View>
+  const inner = (
+    <View style={styles.row}>
+      <Text style={styles.emoji}>{data.emoji}</Text>
+      <View style={styles.body}>
+        <Text style={styles.mainLine}>
+          Şu an <Text style={styles.temp}>{temp}°C</Text>
+          {' · '}
+          {data.labelTr}
+          {wind}
+        </Text>
+        <Text style={styles.source}>Kaynak: Open-Meteo · 16 günlük tahmin için dokun</Text>
       </View>
     </View>
   );
+
+  if (props.onOpenForecast) {
+    return (
+      <Pressable
+        onPress={props.onOpenForecast}
+        style={({ pressed }) => [styles.card, pressed && { opacity: 0.92 }]}
+        accessibilityRole="button"
+        accessibilityLabel="Hava durumu, 16 günlük tahmin"
+      >
+        {inner}
+      </Pressable>
+    );
+  }
+
+  return <View style={styles.card}>{inner}</View>;
 }
 
 function createStyles(theme: AppTheme) {

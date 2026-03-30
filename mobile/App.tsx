@@ -1,8 +1,12 @@
-import { NavigationContainer } from '@react-navigation/native';
+import {
+  createNavigationContainerRef,
+  NavigationContainer,
+} from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import * as ExpoLinking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Screen } from './src/components/Screen';
@@ -11,8 +15,10 @@ import { MainTabNavigator } from './src/navigation/MainTabNavigator';
 import type { RootStackParamList } from './src/navigation/types';
 import { ThemeProvider, useAppTheme, useThemeMode } from './src/ThemeContext';
 import { AuthScreen } from './src/screens/AuthScreen';
+import { ReleaseNotesGate } from './src/components/ReleaseNotesGate';
 import { JoinInviteScreen } from './src/screens/JoinInviteScreen';
 import type { AppTheme } from './src/theme';
+import { parseTripInviteIdFromUrl } from './src/utils/tripInviteLink';
 
 /** Sadece web: mobilde `window` polyfill olabilir ama `window.location` yok → .search patlar. */
 const getInitialInviteTripId = (): string | null => {
@@ -41,6 +47,7 @@ if (Platform.OS === 'web' && typeof window !== 'undefined') {
 }
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
 export default function App() {
   return (
@@ -58,6 +65,9 @@ function AppInner() {
   const bootStyles = useMemo(() => createBootStyles(appTheme), [appTheme]);
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [navReady, setNavReady] = useState(false);
+  const pendingInviteTripIdRef = useRef<string | null>(null);
+  const initialUrlHandledRef = useRef(false);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -66,6 +76,46 @@ function AppInner() {
     });
     return () => unsub();
   }, []);
+
+  /** Native / derin bağlantı: routewise://join/{tripId} — giriş yoksa davet kimliği bekletilir. */
+  useEffect(() => {
+    if (!navReady || !authReady) return;
+
+    const handleIncoming = (url: string | null) => {
+      const id = parseTripInviteIdFromUrl(url);
+      if (!id) return;
+      if (user && navigationRef.isReady()) {
+        navigationRef.navigate('JoinInvite', { tripId: id });
+      } else {
+        pendingInviteTripIdRef.current = id;
+      }
+    };
+
+    if (!initialUrlHandledRef.current) {
+      initialUrlHandledRef.current = true;
+      void ExpoLinking.getInitialURL().then(handleIncoming);
+    }
+
+    const sub = ExpoLinking.addEventListener('url', (e) => handleIncoming(e.url));
+    return () => sub.remove();
+  }, [navReady, authReady, user]);
+
+  useEffect(() => {
+    if (!navReady || !authReady || !user || !navigationRef.isReady()) return;
+    const pending = pendingInviteTripIdRef.current;
+    if (pending) {
+      pendingInviteTripIdRef.current = null;
+      navigationRef.navigate('JoinInvite', { tripId: pending });
+    }
+  }, [navReady, authReady, user]);
+
+  /** Web: sayfa ?invite= ile açıldı, oturum yoksa kimlik giriş sonrasına saklanır. */
+  useEffect(() => {
+    if (!authReady) return;
+    const id = String(initialInviteTripId ?? '').trim();
+    if (!id || user) return;
+    pendingInviteTripIdRef.current = id;
+  }, [authReady, user]);
 
   /** Giriş sonrası doğrudan ana sekme; `?invite=` yalnızca geçerli id ile davet ekranına gider. */
   const initialSignedInRoute = useMemo(() => {
@@ -87,7 +137,8 @@ function AppInner() {
   }
 
   return (
-    <NavigationContainer>
+    <>
+    <NavigationContainer ref={navigationRef} onReady={() => setNavReady(true)}>
       <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
       <Stack.Navigator
         screenOptions={{ headerShown: false, animation: 'fade' }}
@@ -127,6 +178,8 @@ function AppInner() {
         )}
       </Stack.Navigator>
     </NavigationContainer>
+    {user ? <ReleaseNotesGate /> : null}
+    </>
   );
 }
 

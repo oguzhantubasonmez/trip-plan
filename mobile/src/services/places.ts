@@ -3,6 +3,7 @@
  * - iOS / Android: REST JSON (CORS yok).
  * - Web: Maps JavaScript API — AutocompleteSuggestion + Place (Places API New).
  *   Tarayıcıda REST autocomplete CORS ile bloklanır; JS kütüphanesi kullanılır.
+ * - Autocomplete ülkeye sabitlenmez; öneriler küresel (metin dili `language: tr`).
  *
  * .env: EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
  * Cloud Console: Maps JavaScript API, Places API (New) etkin olsun.
@@ -115,7 +116,6 @@ async function searchPlacesNative(
     input: trimmed,
     key,
     language: 'tr',
-    components: 'country:tr',
   });
   if (mode === 'regions') params.set('types', '(regions)');
   if (mode === 'geocode') params.set('types', 'geocode');
@@ -297,7 +297,6 @@ async function searchPlacesWeb(
   const request: Record<string, unknown> = {
     input: trimmed,
     language: 'tr',
-    includedRegionCodes: ['tr'],
   };
   const primaryTypes = primaryTypesForMode(mode);
   if (primaryTypes?.length) {

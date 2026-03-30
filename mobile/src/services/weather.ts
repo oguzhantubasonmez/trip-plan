@@ -166,6 +166,52 @@ export async function fetchDayWeatherAt(
   }
 }
 
+/**
+ * Open-Meteo günlük tahmin: bugünden itibaren en fazla 16 gün (forecast_days).
+ */
+export async function fetchDailyForecastDays(
+  lat: number,
+  lon: number,
+  days: number = OPEN_METEO_MAX_FORECAST_DAYS
+): Promise<DayWeatherSnapshot[]> {
+  const n = Math.min(Math.max(1, Math.floor(days)), OPEN_METEO_MAX_FORECAST_DAYS);
+  const q = new URLSearchParams({
+    latitude: String(lat),
+    longitude: String(lon),
+    daily: 'weather_code,temperature_2m_max,temperature_2m_min',
+    timezone: 'auto',
+    forecast_days: String(n),
+  });
+  try {
+    const res = await fetch(`https://api.open-meteo.com/v1/forecast?${q.toString()}`);
+    if (!res.ok) return [];
+    const json = (await res.json()) as {
+      daily?: {
+        time?: string[];
+        weather_code?: (number | null)[];
+        temperature_2m_max?: (number | null)[];
+        temperature_2m_min?: (number | null)[];
+      };
+    };
+    const d = json.daily;
+    if (!d?.time?.length) return [];
+    const out: DayWeatherSnapshot[] = [];
+    for (let i = 0; i < d.time.length; i++) {
+      const ymd = d.time[i];
+      if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) continue;
+      const code = d.weather_code?.[i];
+      const max = d.temperature_2m_max?.[i];
+      const min = d.temperature_2m_min?.[i];
+      if (code == null || max == null || min == null) continue;
+      const { emoji, labelTr } = wmoCodeToDisplay(code);
+      out.push({ dateYmd: ymd, minC: min, maxC: max, weatherCode: code, labelTr, emoji });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 export async function fetchCurrentWeather(
   lat: number,
   lon: number

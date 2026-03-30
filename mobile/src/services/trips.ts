@@ -205,6 +205,200 @@ export async function createTrip(params: {
   return tripId;
 }
 
+/** YYYY-MM-DD arasındaki gün farkı (yerel takvim). */
+function dayDeltaBetweenYmd(fromYmd: string, toYmd: string): number {
+  const a = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(fromYmd ?? '').trim());
+  const b = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(toYmd ?? '').trim());
+  if (!a || !b) return 0;
+  const da = new Date(Number(a[1]), Number(a[2]) - 1, Number(a[3]));
+  const db = new Date(Number(b[1]), Number(b[2]) - 1, Number(b[3]));
+  return Math.round((db.getTime() - da.getTime()) / 86400000);
+}
+
+function shiftYmdByDays(ymd: string, deltaDays: number): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd ?? '').trim());
+  if (!m) return String(ymd ?? '').trim();
+  const dt = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  dt.setDate(dt.getDate() + deltaDays);
+  const y = dt.getFullYear();
+  const mo = String(dt.getMonth() + 1).padStart(2, '0');
+  const d = String(dt.getDate()).padStart(2, '0');
+  return `${y}-${mo}-${d}`;
+}
+
+function firestorePayloadForCopiedStop(params: {
+  source: Stop;
+  newTripId: string;
+  newStopId: string;
+  actorUid: string;
+  shiftedStopDate: string | undefined;
+}): Record<string, any> {
+  const { source: s, newTripId, newStopId, actorUid, shiftedStopDate } = params;
+  const data: Record<string, any> = {
+    stopId: newStopId,
+    tripId: newTripId,
+    locationName: s.locationName,
+    status: s.status,
+    order: s.order ?? 0,
+    createdBy: actorUid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  if (s.coords) data.coords = s.coords;
+  if (shiftedStopDate?.trim()) data.stopDate = shiftedStopDate.trim();
+  if (s.arrivalTime) data.arrivalTime = s.arrivalTime;
+  if (s.departureTime) data.departureTime = s.departureTime;
+  if (s.legFromPrevious) data.legFromPrevious = s.legFromPrevious;
+  if (s.placeRating != null && typeof s.placeRating === 'number' && !Number.isNaN(s.placeRating) && s.placeRating > 0) {
+    data.placeRating = Math.round(s.placeRating * 10) / 10;
+  }
+  if (
+    s.placeUserRatingsTotal != null &&
+    typeof s.placeUserRatingsTotal === 'number' &&
+    !Number.isNaN(s.placeUserRatingsTotal) &&
+    s.placeUserRatingsTotal > 0
+  ) {
+    data.placeUserRatingsTotal = Math.round(s.placeUserRatingsTotal);
+  }
+
+  const fromList = Array.isArray(s.extraExpenses) && s.extraExpenses.length > 0;
+  if (fromList) {
+    const cleaned = materializeExpenseIds(sanitizeExtraExpensesInput(s.extraExpenses));
+    if (cleaned.length > 0) {
+      data.extraExpenses = cleaned;
+      applyLegacyCostFieldsFromExpenses(data, cleaned);
+    }
+  } else if (s.cost != null && typeof s.cost === 'number' && !Number.isNaN(s.cost) && s.cost > 0) {
+    const one: StopExtraExpense = {
+      expenseId: newExpenseId(),
+      amount: Math.round(s.cost * 100) / 100,
+      extraExpenseTypeId: s.extraExpenseTypeId ?? null,
+      extraExpenseTypeName: s.extraExpenseTypeName ?? null,
+    };
+    data.extraExpenses = [one];
+    applyLegacyCostFieldsFromExpenses(data, [one]);
+  }
+
+  return data;
+}
+
+/**
+ * Kaynak rotanın duraklarını ve (isteğe bağlı) araç/yakıt özetini kopyalar; yeni tarih aralığına göre durak günlerini kaydırır.
+ * Yeni rota: `actorUid` admin ve tek katılımcı; yorum/anket/davet aynı değildir.
+ */
+export async function copyTripWithNewSchedule(params: {
+  sourceTripId: string;
+  actorUid: string;
+  title: string;
+  startDate: string;
+  endDate: string;
+  startTime?: string;
+  endTime?: string;
+}): Promise<string> {
+  const sourceId = String(params.sourceTripId ?? '').trim();
+  const actorUid = String(params.actorUid ?? '').trim();
+  const title = String(params.title ?? '').trim();
+  const startDate = String(params.startDate ?? '').trim();
+  const endDate = String(params.endDate ?? '').trim();
+  if (!sourceId || !actorUid) throw new Error('Eksik bilgi.');
+  if (!title) throw new Error('Rota adı girin.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+    throw new Error('Tarihler YYYY-MM-DD olmalı.');
+  }
+  if (new Date(endDate + 'T12:00:00').getTime() < new Date(startDate + 'T12:00:00').getTime()) {
+    throw new Error('Bitiş tarihi başlangıçtan önce olamaz.');
+  }
+
+  const source = await getTrip(sourceId);
+  if (!source) throw new Error('Kaynak rota bulunamadı.');
+  if (!source.attendees.some((a) => a.uid === actorUid)) {
+    throw new Error('Bu rotayı kopyalamak için rotaya katılmış olmalısın.');
+  }
+
+  const stops = await getStopsForTrip(sourceId);
+  const dayDelta = dayDeltaBetweenYmd(source.startDate, startDate);
+
+  const tripRef = doc(collection(db, TRIPS));
+  const newTripId = tripRef.id;
+  const attendees: TripAttendee[] = [{ uid: actorUid, role: 'admin', rsvp: 'going' }];
+  const tripPayload: Record<string, any> = {
+    tripId: newTripId,
+    adminId: actorUid,
+    title,
+    startDate,
+    endDate,
+    totalDistance: source.totalDistance ?? 0,
+    totalFuelCost: source.totalFuelCost ?? 0,
+    attendees,
+    attendeeIds: [actorUid],
+    planStatus: 'planned' satisfies TripPlanStatus,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  if (source.vehicleLabel?.trim()) tripPayload.vehicleLabel = source.vehicleLabel.trim();
+  if (
+    source.tripConsumptionLPer100km != null &&
+    typeof source.tripConsumptionLPer100km === 'number' &&
+    !Number.isNaN(source.tripConsumptionLPer100km)
+  ) {
+    tripPayload.tripConsumptionLPer100km = source.tripConsumptionLPer100km;
+  }
+  if (
+    source.fuelPricePerLiter != null &&
+    typeof source.fuelPricePerLiter === 'number' &&
+    !Number.isNaN(source.fuelPricePerLiter)
+  ) {
+    tripPayload.fuelPricePerLiter = source.fuelPricePerLiter;
+  }
+  const st = params.startTime?.trim();
+  const et = params.endTime?.trim();
+  if (st) tripPayload.startTime = st;
+  if (et) tripPayload.endTime = et;
+  stampTripEditor(tripPayload, actorUid);
+
+  if (stops.length === 0) {
+    const batch = writeBatch(db);
+    batch.set(tripRef, tripPayload);
+    await batch.commit();
+    return newTripId;
+  }
+
+  let stopIndex = 0;
+  let firstBatch = true;
+  while (stopIndex < stops.length) {
+    const batch = writeBatch(db);
+    let ops = 0;
+    if (firstBatch) {
+      batch.set(tripRef, tripPayload);
+      firstBatch = false;
+      ops = 1;
+    }
+    while (stopIndex < stops.length && ops < 500) {
+      const s = stops[stopIndex];
+      const stopRef = doc(collection(db, STOPS));
+      const shifted =
+        s.stopDate?.trim() && /^\d{4}-\d{2}-\d{2}$/.test(s.stopDate.trim())
+          ? shiftYmdByDays(s.stopDate.trim(), dayDelta)
+          : undefined;
+      batch.set(
+        stopRef,
+        firestorePayloadForCopiedStop({
+          source: s,
+          newTripId,
+          newStopId: stopRef.id,
+          actorUid,
+          shiftedStopDate: shifted,
+        })
+      );
+      stopIndex++;
+      ops++;
+    }
+    await batch.commit();
+  }
+
+  return newTripId;
+}
+
 export async function getTripsForUser(uid: string): Promise<Trip[]> {
   const q = query(collection(db, TRIPS), where('attendeeIds', 'array-contains', uid));
   const snap = await getDocs(q);

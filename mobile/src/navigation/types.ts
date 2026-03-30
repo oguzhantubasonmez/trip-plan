@@ -2,8 +2,11 @@ import type { NavigatorScreenParams } from '@react-navigation/native';
 
 export type HomeStackParamList = {
   Home: undefined;
+  /** Opsiyonel başlangıç koordinatları (rota durağından açılırsa) */
+  WeatherForecast: { latitude?: number; longitude?: number; label?: string } | undefined;
   CreateTrip: undefined;
   TripDetail: { tripId: string; openAddPlace?: boolean; focusComments?: boolean };
+  CopyTrip: { sourceTripId: string };
   EditTrip: { tripId: string };
   FriendsHub: undefined;
   FriendInviteBrowse: undefined;
