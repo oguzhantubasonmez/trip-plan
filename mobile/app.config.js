@@ -58,6 +58,8 @@ module.exports = {
       ...(base.expo.extra || {}),
       googleMapsApiKey,
       firebaseConfig,
+      /** WhatsApp vb. için tıklanabilir https davet adresi (ör. GitHub Pages’e yüklenen invite-redirect.example.html). */
+      inviteWebBaseUrl: process.env.EXPO_PUBLIC_INVITE_WEB_URL || '',
     },
     plugins: [
       ...base.expo.plugins,

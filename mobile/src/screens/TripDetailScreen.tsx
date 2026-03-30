@@ -85,7 +85,11 @@ import {
   formatTripScheduleSummary,
   sortStopsByRoute,
 } from '../utils/tripSchedule';
-import { buildTripInviteShareMessage, buildTripInviteUrl } from '../utils/tripInviteLink';
+import {
+  buildTripInviteDeepLink,
+  buildTripInviteShareMessage,
+  buildTripInviteSharePrimaryLink,
+} from '../utils/tripInviteLink';
 import { normalizeStopExtraExpenses, stopExtraTotal } from '../utils/stopExpenses';
 
 const RSVP_LABELS: Record<string, string> = {
@@ -245,7 +249,12 @@ export function TripDetailScreen(props: {
     return m;
   }, [trip, stops, stopWeatherByStopId]);
 
-  const inviteUrl = useMemo(() => buildTripInviteUrl(props.tripId), [props.tripId]);
+  const inviteDeepLink = useMemo(() => buildTripInviteDeepLink(props.tripId), [props.tripId]);
+  const inviteSharePrimaryLink = useMemo(
+    () => buildTripInviteSharePrimaryLink(props.tripId),
+    [props.tripId]
+  );
+  const inviteActionsEnabled = Boolean(inviteSharePrimaryLink || inviteDeepLink);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -718,21 +727,32 @@ export function TripDetailScreen(props: {
   }
 
   async function handleCopyInviteLink() {
-    if (!inviteUrl) return;
-    await Clipboard.setStringAsync(inviteUrl);
+    const toCopy = inviteSharePrimaryLink || inviteDeepLink;
+    if (!toCopy) return;
+    await Clipboard.setStringAsync(toCopy);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
 
   async function handleShareInvite() {
-    if (!inviteUrl) return;
+    const primary = inviteSharePrimaryLink || inviteDeepLink;
+    if (!primary) return;
     try {
       const title = trip?.title ?? 'Rota daveti';
-      const message = buildTripInviteShareMessage(trip?.title ?? 'Rota', inviteUrl);
+      const message = buildTripInviteShareMessage(trip?.title ?? 'Rota', primary, {
+        deepLinkFallback:
+          inviteDeepLink && inviteDeepLink !== primary ? inviteDeepLink : undefined,
+      });
+      const iosUrl =
+        Platform.OS === 'ios'
+          ? primary.startsWith('https://')
+            ? primary
+            : inviteDeepLink || primary
+          : undefined;
       await Share.share({
         title,
         message,
-        ...(Platform.OS === 'ios' ? { url: inviteUrl } : {}),
+        ...(iosUrl ? { url: iosUrl } : {}),
       });
     } catch (_) {}
   }
@@ -1273,19 +1293,29 @@ export function TripDetailScreen(props: {
           }
         >
           <View style={styles.inviteRow}>
-            <Pressable onPress={handleCopyInviteLink} style={styles.inviteBtn} disabled={!inviteUrl}>
+            <Pressable
+              onPress={handleCopyInviteLink}
+              style={styles.inviteBtn}
+              disabled={!inviteActionsEnabled}
+            >
               <Text style={styles.inviteBtnText}>
                 {copied ? 'Kopyalandı!' : 'Davet linkini kopyala'}
               </Text>
             </Pressable>
-            <Pressable onPress={handleShareInvite} style={styles.inviteBtn} disabled={!inviteUrl}>
+            <Pressable
+              onPress={handleShareInvite}
+              style={styles.inviteBtn}
+              disabled={!inviteActionsEnabled}
+            >
               <Text style={styles.inviteBtnText}>Rota paylaş</Text>
             </Pressable>
           </View>
           <Text style={styles.inviteHint}>
             {Platform.OS === 'web'
               ? 'Bağlantıyı gönder; alıcı aynı adreste açınca davet ekranı gelir.'
-              : 'Bağlantıyı gönder; RouteWise yüklü cihazda dokununca uygulama açılır, onaylayınca rotaya eklenecekler.'}
+              : Platform.OS === 'android'
+                ? 'WhatsApp’ta routewise:// genelde tıklanmaz. Kalıcı çözüm: derlemede EXPO_PUBLIC_INVITE_WEB_URL ile bir https yönlendirme sayfası (projede invite-redirect.example.html) tanımla; paylaşılan satır o zaman mavi ve tıklanır olur.'
+                : 'Bağlantıyı gönder; RouteWise yüklü cihazda dokununca uygulama açılır, onaylayınca rotaya eklenecekler.'}
           </Text>
           {trip.attendees.map((a) => {
             const removable = isAdmin && a.uid !== currentUid && a.uid !== trip.adminId;

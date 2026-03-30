@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RouteWise daveti</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 1.5rem; max-width: 28rem; margin: 0 auto; }
+    a { color: #0369a1; font-weight: 700; }
+    .muted { color: #64748b; font-size: 0.9rem; margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <p>RouteWise’e yönlendiriliyorsun…</p>
+  <p class="muted">Otomatik açılmazsa: <a id="manual" href="#">Uygulamada aç</a></p>
+  <script>
+    (function () {
+      var p = new URLSearchParams(window.location.search);
+      var id = (p.get('invite') || p.get('trip') || '').trim();
+      var app = id ? 'routewise://join/' + encodeURIComponent(id) : 'routewise://';
+      var a = document.getElementById('manual');
+      if (a) a.href = app;
+      if (id) window.location.replace(app);
+    })();
+  </script>
+</body>
+</html>
