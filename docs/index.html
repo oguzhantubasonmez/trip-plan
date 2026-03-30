@@ -6,21 +6,62 @@
   <title>RouteWise daveti</title>
   <style>
     body { font-family: system-ui, sans-serif; padding: 1.5rem; max-width: 28rem; margin: 0 auto; }
-    a { color: #0369a1; font-weight: 700; }
-    .muted { color: #64748b; font-size: 0.9rem; margin-top: 1rem; }
+    .btn {
+      display: inline-block;
+      margin-top: 0.75rem;
+      padding: 14px 22px;
+      background: #0369a1;
+      color: #fff !important;
+      border-radius: 12px;
+      text-decoration: none;
+      font-weight: 700;
+    }
+    .muted { color: #64748b; font-size: 0.9rem; margin-top: 1rem; line-height: 1.45; }
   </style>
 </head>
 <body>
-  <p>RouteWise’e yönlendiriliyorsun…</p>
-  <p class="muted">Otomatik açılmazsa: <a id="manual" href="#">Uygulamada aç</a></p>
+  <p id="msg">RouteWise daveti</p>
+  <p class="muted" id="sub"></p>
+  <a id="openBtn" class="btn" href="#">RouteWise’te aç</a>
   <script>
     (function () {
       var p = new URLSearchParams(window.location.search);
       var id = (p.get('invite') || p.get('trip') || '').trim();
-      var app = id ? 'routewise://join/' + encodeURIComponent(id) : 'routewise://';
-      var a = document.getElementById('manual');
-      if (a) a.href = app;
-      if (id) window.location.replace(app);
+      var isAndroid = /Android/i.test(navigator.userAgent || '');
+      var pkg = 'com.routewise.tripplan';
+      var play = 'https://play.google.com/store/apps/details?id=' + encodeURIComponent(pkg);
+      var deep = id ? 'routewise://join/' + encodeURIComponent(id) : 'routewise://';
+      var intent =
+        id &&
+        'intent://join/' +
+          encodeURIComponent(id) +
+          '#Intent;scheme=routewise;package=' +
+          pkg +
+          ';S.browser_fallback_url=' +
+          encodeURIComponent(play) +
+          ';end';
+      var btn = document.getElementById('openBtn');
+      var sub = document.getElementById('sub');
+      var msg = document.getElementById('msg');
+
+      if (!id) {
+        msg.textContent = 'Davet bağlantısı eksik';
+        if (sub) sub.textContent = 'Geçerli bir davet linki kullan.';
+        if (btn) btn.style.display = 'none';
+        return;
+      }
+
+      if (btn) btn.href = isAndroid && intent ? intent : deep;
+
+      if (isAndroid) {
+        if (sub) {
+          sub.textContent =
+            'Chrome, otomatik açmayı engelleyebilir. Uygulama için aşağıdaki düğmeye dokun; yüklü değilse Play Store açılır.';
+        }
+      } else {
+        if (sub) sub.textContent = 'Yönlendiriliyorsun…';
+        window.location.replace(deep);
+      }
     })();
   </script>
 </body>
