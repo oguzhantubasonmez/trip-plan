@@ -1,5 +1,6 @@
 # Ubuntu’da Expo prebuild + Gradle — EAS Build kotası kullanmaz.
-# Çıktı: debug APK (imzasız “release” yerine; sideload / dahili test için uygundur).
+# Çıktı: release APK (JS paketi gömülü; telefonda Metro gerekmez).
+# Expo prebuild şablonunda release, debug keystore ile imzalanır — yalnızca dahili test içindir; mağaza için kendi keystore’un gerekir.
 #
 # Gerekli GitHub Secrets (Repository → Settings → Secrets and variables → Actions):
 #   EXPO_PUBLIC_FIREBASE_API_KEY
@@ -87,15 +88,17 @@ jobs:
           CI: '1'
         run: npx expo prebuild --platform android --no-install
 
-      - name: Gradle assembleDebug
+      # assembleDebug JS’i APK’ya koymaz → cihazda "Unable to load script" hatası.
+      # assembleRelease: expo export:embed ile bundle + Hermes; prebuild şablonu release’i debug keystore ile imzalar.
+      - name: Gradle assembleRelease
         working-directory: mobile/android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: routewise-android-debug
-          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          name: routewise-android-release
+          path: mobile/android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
