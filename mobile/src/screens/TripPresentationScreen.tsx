@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   FlatList,
   Image,
   Linking,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   useWindowDimensions,
@@ -614,6 +615,7 @@ export function TripPresentationScreen(props: {
   const [stops, setStops] = useState<Stop[]>([]);
   const [pages, setPages] = useState<StopPresentationPayload[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [pagerViewportHeight, setPagerViewportHeight] = useState(0);
 
   const pagerRef = useRef<FlatList<PresentationRow>>(null);
   const orbitRef = useRef<FlatList<PresentationRow>>(null);
@@ -757,13 +759,28 @@ export function TripPresentationScreen(props: {
 
   const renderPagerItem: ListRenderItem<PresentationRow> = useCallback(
     ({ item }) => {
+      const pageHeight = pagerViewportHeight > 0 ? pagerViewportHeight : undefined;
+      const pageShell = (child: ReactNode) => (
+        <View style={[styles.pagerPage, { width }, pageHeight != null ? { height: pageHeight } : { flex: 1 }]}>
+          <ScrollView
+            style={styles.pagerScroll}
+            contentContainerStyle={styles.pagerScrollContent}
+            showsVerticalScrollIndicator={false}
+            nestedScrollEnabled
+            keyboardShouldPersistTaps="handled"
+          >
+            {child}
+          </ScrollView>
+        </View>
+      );
+
       if (item.kind === 'intro') {
-        if (!trip || !tripTotals) return <View style={{ width }} />;
-        return <IntroSlide width={width} trip={trip} totals={tripTotals} />;
+        if (!trip || !tripTotals) return <View style={{ width, flex: 1 }} />;
+        return pageShell(<IntroSlide width={width} trip={trip} totals={tripTotals} />);
       }
-      return <PresentationStopSlide item={item.payload} width={width} />;
+      return pageShell(<PresentationStopSlide item={item.payload} width={width} />);
     },
-    [width, trip, tripTotals]
+    [width, trip, tripTotals, pagerViewportHeight]
   );
 
   const renderOrbit: ListRenderItem<PresentationRow> = useCallback(
@@ -896,7 +913,9 @@ export function TripPresentationScreen(props: {
         horizontal
         pagingEnabled
         showsHorizontalScrollIndicator={false}
+        nestedScrollEnabled
         style={styles.pagerList}
+        onLayout={(e) => setPagerViewportHeight(e.nativeEvent.layout.height)}
         renderItem={renderPagerItem}
         onViewableItemsChanged={onViewableItemsChanged}
         viewabilityConfig={viewabilityConfig}
@@ -926,6 +945,9 @@ const styles = StyleSheet.create({
   headerTitle: { flex: 1, color: TEXT, fontSize: 18, fontWeight: '900', textAlign: 'center' },
   progress: { color: MUTED, fontSize: 14, fontWeight: '800', minWidth: 40, textAlign: 'right' },
   pagerList: { flex: 1, marginTop: 10 },
+  pagerPage: { overflow: 'hidden' },
+  pagerScroll: { flex: 1 },
+  pagerScrollContent: { flexGrow: 1, paddingBottom: 8 },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 },
   muted: { color: MUTED, fontSize: 15 },
   errorText: { color: '#fca5a5', fontSize: 16, textAlign: 'center' },
