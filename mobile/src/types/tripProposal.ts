@@ -16,6 +16,7 @@ export type EditStopPayload = {
   coords?: { latitude: number; longitude: number };
   placeRating?: number | null;
   placeUserRatingsTotal?: number | null;
+  googlePlaceId?: string | null;
 };
 
 export type TripProposal = {

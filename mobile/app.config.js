@@ -63,6 +63,7 @@ module.exports = {
     },
     plugins: [
       ...base.expo.plugins,
+      'expo-sharing',
       [
         'expo-location',
         {

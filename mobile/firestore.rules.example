@@ -149,5 +149,13 @@ service cloud.firestore {
     match /userActivityRead/{userId} {
       allow read, write: if signedIn() && request.auth.uid == userId;
     }
+
+    /**
+     * Ana sayfa metinleri (tek belge: appContent/home).
+     * Alan örnekleri: anasayfa_baslik, altmetin1, altmetin2 — yalnızca konsol / Admin SDK ile yazılır.
+     */
+    match /appContent/{docId} {
+      allow read: if signedIn();
+    }
   }
 }

@@ -37,6 +37,9 @@ export function CreateTripScreen(props: {
   const [firstStop, setFirstStop] = useState<{
     locationName: string;
     coords: { latitude: number; longitude: number };
+    googlePlaceId?: string;
+    placeRating?: number;
+    placeUserRatingsTotal?: number;
   } | null>(null);
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
@@ -103,6 +106,13 @@ export function CreateTripScreen(props: {
           status: 'approved',
           coords: firstStop.coords,
           order: 0,
+          ...(firstStop.googlePlaceId?.trim() ? { googlePlaceId: firstStop.googlePlaceId.trim() } : {}),
+          ...(firstStop.placeRating != null && firstStop.placeRating > 0
+            ? { placeRating: firstStop.placeRating }
+            : {}),
+          ...(firstStop.placeUserRatingsTotal != null && firstStop.placeUserRatingsTotal > 0
+            ? { placeUserRatingsTotal: firstStop.placeUserRatingsTotal }
+            : {}),
         });
       }
       props.onCreated(tripId, { skipAddPlaceModal: !!firstStop });

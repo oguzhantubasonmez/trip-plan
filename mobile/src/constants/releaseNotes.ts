@@ -5,6 +5,8 @@
  */
 export const RELEASE_NOTES_BY_VERSION: Record<string, string> = {
   '1.0.2': [
+    '• Rota sunumu: gezi detayından durakları üstte görsel, altta özet ve yorumlarla sırayla gez.',
+    '• Yer keşfet: ana sayfada yer ara; seçtiğinde rota sunumuyla aynı düzende tam ekran inceleme.',
     '• Hava durumu: karta dokunarak 16 günlük tahmin; başka konum seçebilirsin.',
     '• Yurtdışı konumları arama özelliği eklendi.',
     '• Rota kopyalama özelliği eklendi.',

@@ -38,6 +38,10 @@ type Props = {
     coords: { latitude: number; longitude: number };
     /** YYYY-MM-DD — yalnızca pickStopDate true iken */
     stopDate?: string;
+    /** Places aramasından seçim; sunumda Google özet/yorum için */
+    googlePlaceId?: string;
+    placeRating?: number;
+    placeUserRatingsTotal?: number;
   }) => Promise<void>;
   /** all: işletme+yer, regions: il/ilçe ağırlıklı, geocode: adres satırı */
   searchMode?: PlacesSearchMode;
@@ -55,6 +59,7 @@ export function AddPlaceModal(props: Props) {
   const [suggestions, setSuggestions] = useState<PlacePrediction[]>([]);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<PlaceDetailsType | null>(null);
+  const [selectedGooglePlaceId, setSelectedGooglePlaceId] = useState<string | null>(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +72,7 @@ export function AddPlaceModal(props: Props) {
       setQuery('');
       setSuggestions([]);
       setSelected(null);
+      setSelectedGooglePlaceId(null);
       setError(null);
       setPlanDay(null);
       return;
@@ -129,6 +135,7 @@ export function AddPlaceModal(props: Props) {
     setError(null);
     try {
       const details = await getPlaceDetails(placeId);
+      setSelectedGooglePlaceId(placeId);
       setSelected(details);
       setSuggestions([]);
       setQuery(details.name);
@@ -159,6 +166,7 @@ export function AddPlaceModal(props: Props) {
         locationName: selected.name,
         coords: { latitude: selected.latitude, longitude: selected.longitude },
         ...(pickDate && planDay ? { stopDate: ymdFromDate(planDay) } : {}),
+        ...(selectedGooglePlaceId ? { googlePlaceId: selectedGooglePlaceId } : {}),
         ...(selected.rating != null && selected.rating > 0 ? { placeRating: selected.rating } : {}),
         ...(selected.userRatingsTotal != null && selected.userRatingsTotal > 0
           ? { placeUserRatingsTotal: selected.userRatingsTotal }

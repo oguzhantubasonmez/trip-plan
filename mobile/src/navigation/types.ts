@@ -6,6 +6,8 @@ export type HomeStackParamList = {
   WeatherForecast: { latitude?: number; longitude?: number; label?: string } | undefined;
   CreateTrip: undefined;
   TripDetail: { tripId: string; openAddPlace?: boolean; focusComments?: boolean };
+  /** Uygulama içi rota sunumu — önce rota özeti, sonra duraklar; initialIndex 0 tabanlı durak (ilk durak 0) */
+  TripPresentation: { tripId: string; initialIndex?: number };
   CopyTrip: { sourceTripId: string };
   EditTrip: { tripId: string };
   FriendsHub: undefined;

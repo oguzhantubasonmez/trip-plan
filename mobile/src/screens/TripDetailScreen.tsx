@@ -5,6 +5,7 @@ import * as Clipboard from 'expo-clipboard';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
   ActivityIndicator,
+  Alert,
   Modal,
   Platform,
   Pressable,
@@ -91,6 +92,12 @@ import {
   buildTripInviteSharePrimaryLink,
 } from '../utils/tripInviteLink';
 import { normalizeStopExtraExpenses, stopExtraTotal } from '../utils/stopExpenses';
+import {
+  buildPlanSummaryCsv,
+  buildPlanSummaryExportInput,
+  buildPlanSummaryHtml,
+  sharePlanExportFile,
+} from '../utils/planSummaryExport';
 
 const RSVP_LABELS: Record<string, string> = {
   going: 'Katılıyorum',
@@ -147,6 +154,9 @@ export function TripDetailScreen(props: {
   const [proposalBusy, setProposalBusy] = useState<string | null>(null);
   const [myExpenseTypes, setMyExpenseTypes] = useState<ExpenseType[]>([]);
   const [planExtraBreakdownOpen, setPlanExtraBreakdownOpen] = useState(false);
+  const [planExportBusy, setPlanExportBusy] = useState(false);
+  const [tripHeaderMenuVisible, setTripHeaderMenuVisible] = useState(false);
+  const tripScreenMountedRef = useRef(true);
   const [deleteStopTarget, setDeleteStopTarget] = useState<StopType | null>(null);
   const [deleteStopBusy, setDeleteStopBusy] = useState(false);
   const [deleteTripConfirmOpen, setDeleteTripConfirmOpen] = useState(false);
@@ -234,6 +244,13 @@ export function TripDetailScreen(props: {
   useEffect(() => {
     if (props.focusComments) setCommentsSectionOpen(true);
   }, [props.focusComments]);
+
+  useEffect(() => {
+    tripScreenMountedRef.current = true;
+    return () => {
+      tripScreenMountedRef.current = false;
+    };
+  }, []);
 
   const stopWeatherPeekLineByStopId = useMemo(() => {
     if (!trip) return new Map<string, string>();
@@ -340,8 +357,12 @@ export function TripDetailScreen(props: {
         sideErrors.push(e?.message || 'Anketler yüklenemedi.');
       }
 
-      setVehicleLabelInput(t.vehicleLabel ?? '');
       const meForTrip = currentUid ? await getUserProfile(currentUid) : null;
+      setVehicleLabelInput(
+        t.vehicleLabel?.trim()
+          ? t.vehicleLabel.trim()
+          : meForTrip?.defaultVehicleLabel?.trim() ?? ''
+      );
       const cons =
         t.tripConsumptionLPer100km != null
           ? String(t.tripConsumptionLPer100km)
@@ -349,7 +370,14 @@ export function TripDetailScreen(props: {
             ? String(meForTrip.carConsumption)
             : '';
       setTripConsumptionInput(cons);
-      setFuelPriceTripInput(t.fuelPricePerLiter != null ? String(t.fuelPricePerLiter) : '');
+      {
+        const fuelPriceStr =
+          t.fuelPricePerLiter != null
+            ? String(t.fuelPricePerLiter)
+            : meForTrip?.defaultFuelPricePerLiter?.trim() ?? '';
+        setFuelPriceTripInput(fuelPriceStr);
+        setFuelPriceInput(fuelPriceStr);
+      }
 
       {
         const uids = (t.attendees ?? []).map((a) => a.uid);
@@ -592,6 +620,7 @@ export function TripDetailScreen(props: {
     stopDate?: string;
     placeRating?: number;
     placeUserRatingsTotal?: number;
+    googlePlaceId?: string;
   }) {
     const relocating = relocateStopId;
     setRelocateStopId(null);
@@ -612,6 +641,7 @@ export function TripDetailScreen(props: {
             params.placeUserRatingsTotal != null && params.placeUserRatingsTotal > 0
               ? params.placeUserRatingsTotal
               : null,
+          googlePlaceId: params.googlePlaceId?.trim() ? params.googlePlaceId.trim() : null,
         };
         if (isTripAdmin) {
           await updateStopFromPayload(
@@ -653,6 +683,7 @@ export function TripDetailScreen(props: {
         ...(params.placeUserRatingsTotal != null && params.placeUserRatingsTotal > 0
           ? { placeUserRatingsTotal: params.placeUserRatingsTotal }
           : {}),
+        ...(params.googlePlaceId?.trim() ? { googlePlaceId: params.googlePlaceId.trim() } : {}),
       });
       const merged = await getStopsForTrip(props.tripId);
       const sorted = sortStopsByRoute(merged, trip.startDate ?? '');
@@ -981,6 +1012,74 @@ export function TripDetailScreen(props: {
   const timeDisplay =
     durationFromLegs > 0 ? formatDrivingDuration(durationFromLegs) : '–';
 
+  async function handleExportPlanCsv() {
+    const t = trip;
+    if (!t) return;
+    setPlanExportBusy(true);
+    setError(null);
+    try {
+      const input = buildPlanSummaryExportInput({
+        trip: t,
+        routeOrderedStops,
+        kmLine: kmDisplay,
+        durationLine: timeDisplay,
+        grandTotalCost,
+        fuelCostNum,
+        totalExtraCosts,
+        perPersonGrand,
+        goingCount,
+        extraCostsByCategory,
+      });
+      const csv = buildPlanSummaryCsv(input);
+      await sharePlanExportFile({
+        tripId: t.tripId,
+        tripTitle: t.title,
+        extension: 'csv',
+        content: csv,
+        mimeType: 'text/csv',
+        dialogTitle: 'Plan özeti (Excel / CSV)',
+      });
+    } catch (e: any) {
+      setError(e?.message || 'CSV dışa aktarılamadı.');
+    } finally {
+      setPlanExportBusy(false);
+    }
+  }
+
+  async function handleExportPlanHtml() {
+    const t = trip;
+    if (!t) return;
+    setPlanExportBusy(true);
+    setError(null);
+    try {
+      const input = buildPlanSummaryExportInput({
+        trip: t,
+        routeOrderedStops,
+        kmLine: kmDisplay,
+        durationLine: timeDisplay,
+        grandTotalCost,
+        fuelCostNum,
+        totalExtraCosts,
+        perPersonGrand,
+        goingCount,
+        extraCostsByCategory,
+      });
+      const html = buildPlanSummaryHtml(input);
+      await sharePlanExportFile({
+        tripId: t.tripId,
+        tripTitle: t.title,
+        extension: 'html',
+        content: html,
+        mimeType: 'text/html',
+        dialogTitle: 'Plan özeti (Özet Tablo)',
+      });
+    } catch (e: any) {
+      setError(e?.message || 'HTML dışa aktarılamadı.');
+    } finally {
+      setPlanExportBusy(false);
+    }
+  }
+
   function proposalSummary(p: TripProposal): string {
     const x = p.payload;
     const parts: string[] = [];
@@ -1018,6 +1117,7 @@ export function TripDetailScreen(props: {
   const isTripParticipant = Boolean(
     currentUid && trip.attendees.some((a) => a.uid === currentUid)
   );
+  const showTripHeaderMenu = (isTripParticipant && Boolean(currentUid)) || isAdmin;
 
   async function handleCycleTripPlanStatus() {
     if (!currentUid || !isTripParticipant || !trip) return;
@@ -1198,9 +1298,22 @@ export function TripDetailScreen(props: {
           {...(Platform.OS === 'web' ? { nativeID: 'rw-scroll-trip-detail' } : {})}
         >
         <View style={styles.header}>
-          <Pressable onPress={props.onBack} style={styles.backRow}>
-            <Text style={styles.backText}>‹ Geri</Text>
-          </Pressable>
+          <View style={styles.tripHeaderTopRow}>
+            <Pressable onPress={props.onBack} style={styles.backRow}>
+              <Text style={styles.backText}>‹ Geri</Text>
+            </Pressable>
+            <View style={styles.tripHeaderTopSpacer} />
+            {showTripHeaderMenu ? (
+              <Pressable
+                onPress={() => setTripHeaderMenuVisible(true)}
+                style={({ pressed }) => [styles.tripHeaderGearBtn, pressed && { opacity: 0.88 }]}
+                accessibilityRole="button"
+                accessibilityLabel="Rota seçenekleri: kopyala, düzenle, sil"
+              >
+                <Ionicons name="settings-outline" size={22} color={appTheme.color.primaryDark} />
+              </Pressable>
+            ) : null}
+          </View>
           <Text style={styles.tripEmoji}>🧭</Text>
           <Text style={styles.title} numberOfLines={3}>
             {trip.title}
@@ -1233,46 +1346,19 @@ export function TripDetailScreen(props: {
               onPressCycle={() => void handleCycleTripPlanStatus()}
             />
           </View>
-          {isTripParticipant && currentUid ? (
-            <Pressable
-              onPress={() => navigation.navigate('CopyTrip', { sourceTripId: props.tripId })}
-              style={({ pressed }) => [styles.copyTripBtn, pressed && { opacity: 0.88 }]}
-              accessibilityRole="button"
-              accessibilityLabel="Rota kopyala"
-            >
-              <Ionicons name="copy-outline" size={18} color={appTheme.color.primaryDark} />
-              <Text style={styles.copyTripBtnLabel}>Rota kopyala</Text>
-            </Pressable>
-          ) : null}
-          {isAdmin && (
-            <View style={styles.adminTripToolbar}>
+          {routeOrderedStops.length > 0 ? (
+            <View style={styles.tripHeaderActionsRow}>
               <Pressable
-                onPress={() => navigation.navigate('EditTrip', { tripId: props.tripId })}
-                style={({ pressed }) => [
-                  styles.adminToolbarBtn,
-                  pressed && { opacity: 0.88 },
-                ]}
+                onPress={() => navigation.navigate('TripPresentation', { tripId: props.tripId })}
+                style={({ pressed }) => [styles.copyTripBtn, pressed && { opacity: 0.88 }]}
                 accessibilityRole="button"
-                accessibilityLabel="Rotayı düzenle"
+                accessibilityLabel="Rota sunumunu tam ekran aç; durakları yatay kaydırarak gez"
               >
-                <Ionicons name="create-outline" size={18} color={appTheme.color.primaryDark} />
-                <Text style={styles.adminToolbarBtnLabel}>Düzenle</Text>
-              </Pressable>
-              <Pressable
-                onPress={confirmDeleteTrip}
-                style={({ pressed }) => [
-                  styles.adminToolbarBtn,
-                  styles.adminToolbarBtnDanger,
-                  pressed && { opacity: 0.88 },
-                ]}
-                accessibilityRole="button"
-                accessibilityLabel="Rotayı sil"
-              >
-                <Ionicons name="trash-outline" size={18} color={appTheme.color.danger} />
-                <Text style={[styles.adminToolbarBtnLabel, styles.adminToolbarBtnLabelDanger]}>Sil</Text>
+                <Ionicons name="easel-outline" size={18} color={appTheme.color.primaryDark} />
+                <Text style={styles.copyTripBtnLabel}>Rota Sunumu</Text>
               </Pressable>
             </View>
-          )}
+          ) : null}
         </View>
 
         {error ? <Text style={styles.errorLine}>{error}</Text> : null}
@@ -1310,13 +1396,6 @@ export function TripDetailScreen(props: {
               <Text style={styles.inviteBtnText}>Rota paylaş</Text>
             </Pressable>
           </View>
-          <Text style={styles.inviteHint}>
-            {Platform.OS === 'web'
-              ? 'Bağlantıyı gönder; alıcı aynı adreste açınca davet ekranı gelir.'
-              : Platform.OS === 'android'
-                ? 'WhatsApp’ta routewise:// genelde tıklanmaz. Kalıcı çözüm: derlemede EXPO_PUBLIC_INVITE_WEB_URL ile bir https yönlendirme sayfası (projede invite-redirect.example.html) tanımla; paylaşılan satır o zaman mavi ve tıklanır olur.'
-                : 'Bağlantıyı gönder; RouteWise yüklü cihazda dokununca uygulama açılır, onaylayınca rotaya eklenecekler.'}
-          </Text>
           {trip.attendees.map((a) => {
             const removable = isAdmin && a.uid !== currentUid && a.uid !== trip.adminId;
             return (
@@ -1493,6 +1572,36 @@ export function TripDetailScreen(props: {
               Kişi başı · {goingCount} katılıyor: {perPersonGrand.toFixed(2)} ₺
             </Text>
           )}
+          <View style={styles.planExportRow}>
+            <Pressable
+              onPress={handleExportPlanCsv}
+              style={({ pressed }) => [
+                styles.planExportBtn,
+                pressed ? { opacity: 0.9 } : null,
+                planExportBusy ? { opacity: 0.55 } : null,
+              ]}
+              disabled={planExportBusy}
+              accessibilityRole="button"
+              accessibilityLabel="Plan özetini Excel uyumlu CSV olarak indir veya paylaş"
+            >
+              <Ionicons name="download-outline" size={18} color={appTheme.color.primaryDark} />
+              <Text style={styles.planExportBtnText}>CSV (Excel)</Text>
+            </Pressable>
+            <Pressable
+              onPress={handleExportPlanHtml}
+              style={({ pressed }) => [
+                styles.planExportBtn,
+                pressed ? { opacity: 0.9 } : null,
+                planExportBusy ? { opacity: 0.55 } : null,
+              ]}
+              disabled={planExportBusy}
+              accessibilityRole="button"
+              accessibilityLabel="Plan özetini özet HTML tablo olarak paylaş"
+            >
+              <Ionicons name="document-text-outline" size={18} color={appTheme.color.primaryDark} />
+              <Text style={styles.planExportBtnText}>Özet Tablo</Text>
+            </Pressable>
+          </View>
           {(isAdmin || isEditor) && (
             <>
               <View style={styles.blockSpacer} />
@@ -2209,6 +2318,77 @@ export function TripDetailScreen(props: {
         loading={tripPollTipLoading}
         error={tripPollTipError}
       />
+
+      <Modal
+        visible={tripHeaderMenuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setTripHeaderMenuVisible(false)}
+      >
+        <View style={styles.tripHeaderMenuRoot} pointerEvents="box-none">
+          <Pressable
+            style={styles.tripHeaderMenuBackdrop}
+            onPress={() => setTripHeaderMenuVisible(false)}
+            accessibilityLabel="Menüyü kapat"
+          />
+          <View style={styles.tripHeaderMenuCard} accessibilityViewIsModal>
+            <Text style={styles.tripHeaderMenuTitle}>Rota</Text>
+            {isTripParticipant && currentUid ? (
+              <Pressable
+                onPress={() => {
+                  setTripHeaderMenuVisible(false);
+                  navigation.navigate('CopyTrip', { sourceTripId: props.tripId });
+                }}
+                style={({ pressed }) => [styles.tripHeaderMenuItem, pressed && { opacity: 0.85 }]}
+                accessibilityRole="button"
+                accessibilityLabel="Rota kopyala"
+              >
+                <Ionicons name="copy-outline" size={20} color={appTheme.color.primaryDark} />
+                <Text style={styles.tripHeaderMenuItemLabel}>Rota kopyala</Text>
+              </Pressable>
+            ) : null}
+            {isAdmin ? (
+              <Pressable
+                onPress={() => {
+                  setTripHeaderMenuVisible(false);
+                  navigation.navigate('EditTrip', { tripId: props.tripId });
+                }}
+                style={({ pressed }) => [styles.tripHeaderMenuItem, pressed && { opacity: 0.85 }]}
+                accessibilityRole="button"
+                accessibilityLabel="Rotayı düzenle"
+              >
+                <Ionicons name="create-outline" size={20} color={appTheme.color.primaryDark} />
+                <Text style={styles.tripHeaderMenuItemLabel}>Düzenle</Text>
+              </Pressable>
+            ) : null}
+            {isAdmin ? (
+              <Pressable
+                onPress={() => {
+                  setTripHeaderMenuVisible(false);
+                  confirmDeleteTrip();
+                }}
+                style={({ pressed }) => [
+                  styles.tripHeaderMenuItem,
+                  styles.tripHeaderMenuItemDanger,
+                  pressed && { opacity: 0.85 },
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel="Rotayı sil"
+              >
+                <Ionicons name="trash-outline" size={20} color={appTheme.color.danger} />
+                <Text style={[styles.tripHeaderMenuItemLabel, styles.tripHeaderMenuItemLabelDanger]}>Sil</Text>
+              </Pressable>
+            ) : null}
+            <Pressable
+              onPress={() => setTripHeaderMenuVisible(false)}
+              style={({ pressed }) => [styles.tripHeaderMenuCancel, pressed && { opacity: 0.85 }]}
+              accessibilityRole="button"
+            >
+              <Text style={styles.tripHeaderMenuCancelText}>Vazgeç</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
@@ -2242,7 +2422,16 @@ function createTripDetailStyles(t: AppTheme) {
       fontWeight: '800',
     },
     header: { gap: 4, marginBottom: t.space.sm },
-    backRow: { alignSelf: 'flex-start', paddingVertical: 4, paddingHorizontal: 4 },
+    tripHeaderTopRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      width: '100%',
+    },
+    tripHeaderTopSpacer: {
+      flex: 1,
+      minWidth: t.space.sm,
+    },
+    backRow: { paddingVertical: 4, paddingHorizontal: 4 },
     backText: { color: t.color.primaryDark, fontSize: t.font.body, fontWeight: '800' },
     tripEmoji: { fontSize: 28, marginTop: 2 },
     title: { color: t.color.text, fontSize: t.font.h1, fontWeight: '900', letterSpacing: -0.3 },
@@ -2259,7 +2448,6 @@ function createTripDetailStyles(t: AppTheme) {
       marginTop: t.space.sm,
     },
     copyTripBtn: {
-      marginTop: t.space.sm,
       alignSelf: 'center',
       flexDirection: 'row',
       alignItems: 'center',
@@ -2276,35 +2464,84 @@ function createTripDetailStyles(t: AppTheme) {
       fontSize: t.font.small,
       fontWeight: '800',
     },
-    adminTripToolbar: {
+    tripHeaderActionsRow: {
       marginTop: t.space.sm,
-      alignSelf: 'flex-start',
       flexDirection: 'row',
+      flexWrap: 'wrap',
       alignItems: 'center',
-      gap: 8,
+      justifyContent: 'center',
+      gap: 10,
+      alignSelf: 'stretch',
     },
-    adminToolbarBtn: {
-      flexDirection: 'row',
+    tripHeaderGearBtn: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      borderWidth: 1,
+      borderColor: t.color.primary,
+      backgroundColor: t.color.primarySoft,
       alignItems: 'center',
-      gap: 6,
-      paddingVertical: 8,
-      paddingHorizontal: 12,
-      borderRadius: t.radius.pill,
+      justifyContent: 'center',
+    },
+    tripHeaderMenuRoot: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: t.space.lg,
+    },
+    tripHeaderMenuBackdrop: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: 'rgba(0,0,0,0.45)',
+    },
+    tripHeaderMenuCard: {
+      width: '100%',
+      maxWidth: 340,
+      borderRadius: t.radius.lg,
+      padding: t.space.md,
+      backgroundColor: t.color.surface,
       borderWidth: 1,
       borderColor: t.color.border,
+      ...t.shadowCard,
+      zIndex: 2,
+    },
+    tripHeaderMenuTitle: {
+      fontSize: t.font.small,
+      fontWeight: '900',
+      color: t.color.muted,
+      marginBottom: t.space.sm,
+      textTransform: 'uppercase',
+      letterSpacing: 0.6,
+    },
+    tripHeaderMenuItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingVertical: 12,
+      paddingHorizontal: t.space.sm,
+      borderRadius: t.radius.md,
       backgroundColor: t.color.inputBg,
+      marginBottom: 8,
     },
-    adminToolbarBtnDanger: {
-      borderColor: 'rgba(239, 68, 68, 0.35)',
-      backgroundColor: 'rgba(239, 68, 68, 0.06)',
+    tripHeaderMenuItemDanger: {
+      backgroundColor: 'rgba(239, 68, 68, 0.08)',
     },
-    adminToolbarBtnLabel: {
-      color: t.color.primaryDark,
-      fontSize: t.font.tiny,
+    tripHeaderMenuItemLabel: {
+      fontSize: t.font.body,
       fontWeight: '800',
+      color: t.color.text,
     },
-    adminToolbarBtnLabelDanger: {
+    tripHeaderMenuItemLabelDanger: {
       color: t.color.danger,
+    },
+    tripHeaderMenuCancel: {
+      marginTop: 4,
+      paddingVertical: 12,
+      alignItems: 'center',
+    },
+    tripHeaderMenuCancelText: {
+      fontSize: t.font.small,
+      fontWeight: '800',
+      color: t.color.primaryDark,
     },
     section: {
       backgroundColor: t.color.surface,
@@ -2590,6 +2827,28 @@ function createTripDetailStyles(t: AppTheme) {
     },
     linkBtn: { paddingVertical: 4, paddingHorizontal: 8 },
     linkBtnText: { color: t.color.primary, fontSize: t.font.small, fontWeight: '700' },
+    planExportRow: {
+      flexDirection: 'row',
+      gap: t.space.sm,
+      marginTop: t.space.sm,
+      flexWrap: 'wrap',
+    },
+    planExportBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingVertical: 10,
+      paddingHorizontal: 14,
+      borderRadius: t.radius.pill,
+      borderWidth: 1,
+      borderColor: t.color.primary,
+      backgroundColor: t.color.primarySoft,
+    },
+    planExportBtnText: {
+      color: t.color.primaryDark,
+      fontSize: t.font.small,
+      fontWeight: '800',
+    },
     inviteRow: { flexDirection: 'row', gap: t.space.sm, marginBottom: t.space.sm, flexWrap: 'wrap' },
     inviteBtn: {
       paddingVertical: 8,
@@ -2600,12 +2859,6 @@ function createTripDetailStyles(t: AppTheme) {
       backgroundColor: t.color.inputBg,
     },
     inviteBtnText: { color: t.color.primary, fontSize: t.font.small, fontWeight: '700' },
-    inviteHint: {
-      color: t.color.muted,
-      fontSize: t.font.tiny,
-      lineHeight: 18,
-      marginBottom: t.space.sm,
-    },
     addRow: { flexDirection: 'row', alignItems: 'flex-end', marginBottom: t.space.sm },
     empty: { paddingVertical: t.space.lg },
     stopChainBlock: { marginBottom: 0 },

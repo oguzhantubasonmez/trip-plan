@@ -1,7 +1,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useMemo, useState } from 'react';
 import { signOut } from 'firebase/auth';
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { CollapsibleSection } from '../components/CollapsibleSection';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
@@ -14,7 +14,7 @@ import {
   getUserProfile,
   updateUserProfile,
 } from '../services/userProfile';
-import { useAppTheme, useThemeMode } from '../ThemeContext';
+import { useAppTheme, useThemeMode, type ThemeMode } from '../ThemeContext';
 import type { AppTheme } from '../theme';
 import { nationalDigitsAfterTrCountry, normalizeE164 } from '../utils/phone';
 
@@ -33,6 +33,8 @@ export function ProfileScreen(props: {
   const [displayName, setDisplayName] = useState('');
   const [phoneNational, setPhoneNational] = useState('');
   const [carConsumption, setCarConsumption] = useState('');
+  const [defaultVehicleLabel, setDefaultVehicleLabel] = useState('');
+  const [defaultFuelPricePerLiter, setDefaultFuelPricePerLiter] = useState('');
   const [loading, setLoading] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -48,6 +50,8 @@ export function ProfileScreen(props: {
     const p = await getUserProfile(uid);
     setDisplayName(p?.displayName ?? '');
     setCarConsumption(p?.carConsumption ?? '');
+    setDefaultVehicleLabel(p?.defaultVehicleLabel ?? '');
+    setDefaultFuelPricePerLiter(p?.defaultFuelPricePerLiter ?? '');
     setExpenseTypes(p?.expenseTypes ?? []);
     setPhoneNational(nationalDigitsAfterTrCountry(p?.phoneNumber ?? ''));
   }, [uid]);
@@ -95,6 +99,8 @@ export function ProfileScreen(props: {
       await updateUserProfile(uid, {
         displayName: displayName.trim() || undefined,
         carConsumption: carConsumption.trim() || undefined,
+        defaultVehicleLabel: defaultVehicleLabel.trim() || undefined,
+        defaultFuelPricePerLiter: defaultFuelPricePerLiter.trim() || undefined,
         phoneNumber,
       });
       await load();
@@ -160,7 +166,15 @@ export function ProfileScreen(props: {
     return `${expenseTypes.length} tür`;
   }, [expenseTypes.length]);
 
-  const themeSummary = mode === 'dark' ? 'Koyu tema açık' : 'Açık tema';
+  const themeOptionLabel: Record<ThemeMode, string> = {
+    light: 'Açık',
+    dark: 'Koyu',
+    ocean: 'Okyanus',
+    sunset: 'Gün batımı',
+    forest: 'Orman',
+  };
+
+  const themeSummary = `Tema: ${themeOptionLabel[mode]}`;
 
   return (
     <Screen>
@@ -180,8 +194,8 @@ export function ProfileScreen(props: {
         <Text style={styles.heroEmoji}>🚗</Text>
         <Text style={styles.title}>Profil</Text>
         <Text style={styles.sub}>
-          Telefon rehber eşleşmesi için; yakıt alanı ise rota ekranındaki yakıt tahmininde varsayılan tüketim
-          olarak kullanılır.
+          Telefon rehber eşleşmesi için. Araç tüketimi, araç ismi ve yakıt fiyatı rota detayındaki «Araç ve yakıt»
+          bölümüne varsayılan olarak düşer; her rotada farklı değer girebilirsin.
         </Text>
       </View>
 
@@ -287,10 +301,24 @@ export function ProfileScreen(props: {
           placeholder="Örn. 7"
           keyboardType="number-pad"
           onChangeText={setCarConsumption}
-          helperText={
-            '100 km’de kaç litre yakıt (örn. 7). Rota detayında «Araç ve yakıt» bölümüne varsayılan olarak ' +
-            'düşer; istersen her rotada farklı değer girebilirsin.'
-          }
+          helperText="100 km’de kaç litre (örn. 7)."
+        />
+        <View style={{ height: theme.space.sm }} />
+        <TextField
+          label="Araç ismi (varsayılan etiket)"
+          value={defaultVehicleLabel}
+          placeholder="Örn. SUV, babanın arabası"
+          onChangeText={setDefaultVehicleLabel}
+          helperText="Yeni açılan veya etiketi boş rotada «Araç (etiket)» alanına bu metin gelir."
+        />
+        <View style={{ height: theme.space.sm }} />
+        <TextField
+          label="Yakıt fiyatı (TL/L, varsayılan)"
+          value={defaultFuelPricePerLiter}
+          placeholder="Örn. 38,5"
+          keyboardType="decimal-pad"
+          onChangeText={setDefaultFuelPricePerLiter}
+          helperText="Rotada yakıt fiyatı kayıtlı değilse bu değer önerilir; virgül veya nokta kullanabilirsin."
         />
         <View style={{ height: theme.space.md }} />
         <PrimaryButton title="💾 Kaydet" onPress={save} loading={loading} />
@@ -349,17 +377,42 @@ export function ProfileScreen(props: {
         collapsedSummary={themeSummary}
         containerStyle={[styles.card, styles.sectionGap]}
       >
-        <View style={styles.themeSwitchRow}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.themeTitle}>Koyu tema</Text>
-            <Text style={styles.themeSub}>Gece ve düşük ışık için</Text>
-          </View>
-          <Switch
-            value={mode === 'dark'}
-            onValueChange={(v) => setMode(v ? 'dark' : 'light')}
-            trackColor={{ false: theme.color.border, true: theme.color.primarySoft }}
-            thumbColor={mode === 'dark' ? theme.color.primary : theme.color.surface}
-          />
+        <Text style={styles.themeSub}>Uygulama renk paleti — istediğin görünümü seç.</Text>
+        <View style={{ height: theme.space.sm }} />
+        <View style={styles.themeGrid}>
+          {(
+            [
+              { id: 'light' as const, emoji: '☀️', title: 'Açık', sub: 'Gündüz, yüksek okunurluk' },
+              { id: 'dark' as const, emoji: '🌙', title: 'Koyu', sub: 'Gece ve düşük ışık' },
+              { id: 'ocean' as const, emoji: '🌊', title: 'Okyanus', sub: 'Camgöbeği tonları' },
+              { id: 'sunset' as const, emoji: '🌅', title: 'Gün batımı', sub: 'Sıcak mor & mercan' },
+              { id: 'forest' as const, emoji: '🌲', title: 'Orman', sub: 'Zümrüt yeşili' },
+            ] as const
+          ).map((opt) => {
+            const active = mode === opt.id;
+            return (
+              <Pressable
+                key={opt.id}
+                onPress={() => setMode(opt.id)}
+                style={({ pressed }) => [
+                  styles.themeOption,
+                  active && styles.themeOptionActive,
+                  pressed && { opacity: 0.92 },
+                ]}
+              >
+                <Text style={styles.themeOptionEmoji}>{opt.emoji}</Text>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={[styles.themeOptionTitle, active && styles.themeOptionTitleActive]}>
+                    {opt.title}
+                  </Text>
+                  <Text style={styles.themeOptionSub} numberOfLines={2}>
+                    {opt.sub}
+                  </Text>
+                </View>
+                {active ? <Text style={styles.themeCheck}>✓</Text> : null}
+              </Pressable>
+            );
+          })}
         </View>
       </CollapsibleSection>
 
@@ -519,14 +572,32 @@ function createProfileStyles(theme: AppTheme) {
       paddingHorizontal: 8,
     },
     saved: { color: theme.color.success, fontSize: theme.font.small, marginTop: theme.space.sm, fontWeight: '700' },
-    themeSwitchRow: {
+    themeGrid: { gap: theme.space.sm },
+    themeOption: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: theme.space.md,
-      paddingVertical: 4,
+      paddingVertical: 12,
+      paddingHorizontal: theme.space.md,
+      borderRadius: theme.radius.lg,
+      borderWidth: 1.5,
+      borderColor: theme.color.border,
+      backgroundColor: theme.color.inputBg,
     },
-    themeTitle: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '800' },
-    themeSub: { color: theme.color.muted, fontSize: theme.font.tiny, marginTop: 2 },
+    themeOptionActive: {
+      borderColor: theme.color.primary,
+      backgroundColor: theme.color.primarySoft,
+    },
+    themeOptionEmoji: { fontSize: 22 },
+    themeOptionTitle: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '800' },
+    themeOptionTitleActive: { color: theme.color.primaryDark },
+    themeOptionSub: { color: theme.color.muted, fontSize: theme.font.tiny, marginTop: 2, lineHeight: 16 },
+    themeCheck: {
+      color: theme.color.primary,
+      fontSize: theme.font.h2,
+      fontWeight: '900',
+    },
+    themeSub: { color: theme.color.muted, fontSize: theme.font.small, lineHeight: 20 },
     extraBtnFlat: {
       borderRadius: theme.radius.lg,
       padding: theme.space.lg,

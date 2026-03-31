@@ -9,6 +9,7 @@ import { GroupDetailScreen } from '../screens/GroupDetailScreen';
 import { GroupsScreen } from '../screens/GroupsScreen';
 import { HomeScreen } from '../screens/HomeScreen';
 import { TripDetailScreen } from '../screens/TripDetailScreen';
+import { TripPresentationScreen } from '../screens/TripPresentationScreen';
 import { WeatherForecastScreen } from '../screens/WeatherForecastScreen';
 import type { HomeStackParamList } from './types';
 
@@ -62,6 +63,15 @@ export function HomeStackNavigator() {
             tripId={route.params.tripId}
             openAddPlace={route.params.openAddPlace}
             focusComments={route.params.focusComments}
+            onBack={() => navigation.goBack()}
+          />
+        )}
+      </Stack.Screen>
+      <Stack.Screen name="TripPresentation">
+        {({ route, navigation }) => (
+          <TripPresentationScreen
+            tripId={route.params.tripId}
+            initialIndex={route.params.initialIndex}
             onBack={() => navigation.goBack()}
           />
         )}

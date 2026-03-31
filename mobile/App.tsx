@@ -15,9 +15,12 @@ import { MainTabNavigator } from './src/navigation/MainTabNavigator';
 import type { RootStackParamList } from './src/navigation/types';
 import { ThemeProvider, useAppTheme, useThemeMode } from './src/ThemeContext';
 import { AuthScreen } from './src/screens/AuthScreen';
+import { AppOnboardingTour } from './src/components/AppOnboardingTour';
+import { LaunchSplashOverlay } from './src/components/LaunchSplashOverlay';
 import { ReleaseNotesGate } from './src/components/ReleaseNotesGate';
 import { JoinInviteScreen } from './src/screens/JoinInviteScreen';
 import type { AppTheme } from './src/theme';
+import { isAppOnboardingDoneForUser } from './src/services/appOnboardingStorage';
 import { parseTripInviteIdFromUrl } from './src/utils/tripInviteLink';
 
 /** Sadece web: mobilde `window` polyfill olabilir ama `window.location` yok → .search patlar. */
@@ -68,6 +71,9 @@ function AppInner() {
   const [navReady, setNavReady] = useState(false);
   const pendingInviteTripIdRef = useRef<string | null>(null);
   const initialUrlHandledRef = useRef(false);
+  const [rootRouteName, setRootRouteName] = useState<string | undefined>(undefined);
+  const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
+  const [launchSplashDone, setLaunchSplashDone] = useState(false);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -76,6 +82,40 @@ function AppInner() {
     });
     return () => unsub();
   }, []);
+
+  useEffect(() => {
+    const uid = user?.uid;
+    if (!uid) {
+      setOnboardingDone(null);
+      return;
+    }
+    let alive = true;
+    void (async () => {
+      const done = await isAppOnboardingDoneForUser(uid);
+      if (alive) setOnboardingDone(done);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [user?.uid]);
+
+  useEffect(() => {
+    if (!navReady) return;
+    const read = () => {
+      if (!navigationRef.isReady()) return;
+      try {
+        const st = navigationRef.getRootState();
+        const idx = st?.index ?? 0;
+        const r = st?.routes?.[idx];
+        setRootRouteName(typeof r?.name === 'string' ? r.name : undefined);
+      } catch {
+        setRootRouteName(undefined);
+      }
+    };
+    read();
+    const unsub = navigationRef.addListener('state', read);
+    return unsub;
+  }, [navReady]);
 
   /** Native / derin bağlantı: routewise://join/{tripId} — giriş yoksa davet kimliği bekletilir. */
   useEffect(() => {
@@ -124,6 +164,23 @@ function AppInner() {
     return 'Main' as const;
   }, []);
 
+  const showOnboardingTour =
+    Boolean(user?.uid) &&
+    onboardingDone === false &&
+    rootRouteName === 'Main';
+
+  if (!launchSplashDone) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#0B1220' }}>
+        <StatusBar style="light" />
+        <LaunchSplashOverlay
+          authReady={authReady}
+          onFinished={() => setLaunchSplashDone(true)}
+        />
+      </View>
+    );
+  }
+
   if (!authReady) {
     return (
       <Screen>
@@ -131,7 +188,7 @@ function AppInner() {
           <ActivityIndicator color={appTheme.color.primary} />
           <Text style={bootStyles.bootText}>Hazırlanıyor…</Text>
         </View>
-        <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
+        <StatusBar style={mode === 'light' ? 'dark' : 'light'} />
       </Screen>
     );
   }
@@ -139,7 +196,7 @@ function AppInner() {
   return (
     <>
     <NavigationContainer ref={navigationRef} onReady={() => setNavReady(true)}>
-      <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
+      <StatusBar style={mode === 'light' ? 'dark' : 'light'} />
       <Stack.Navigator
         screenOptions={{ headerShown: false, animation: 'fade' }}
         initialRouteName={user ? initialSignedInRoute : 'Auth'}
@@ -179,6 +236,14 @@ function AppInner() {
       </Stack.Navigator>
     </NavigationContainer>
     {user ? <ReleaseNotesGate /> : null}
+    {user?.uid ? (
+      <AppOnboardingTour
+        visible={showOnboardingTour}
+        userId={user.uid}
+        navigationRef={navigationRef}
+        onFinished={() => setOnboardingDone(true)}
+      />
+    ) : null}
     </>
   );
 }

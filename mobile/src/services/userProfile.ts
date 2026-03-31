@@ -57,6 +57,10 @@ export type UserProfile = {
   displayName?: string;
   avatar?: string;
   carConsumption?: string;
+  /** Rota «Araç ve yakıt» için varsayılan araç adı / etiketi */
+  defaultVehicleLabel?: string;
+  /** Rota için varsayılan yakıt fiyatı (TL/L), metin olarak saklanır */
+  defaultFuelPricePerLiter?: string;
   friends?: string[];
   /** Kullanıcının tanımladığı ekstra masraf türleri (durak masrafında seçilir) */
   expenseTypes?: ExpenseType[];
@@ -74,6 +78,17 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
     displayName: v.displayName,
     avatar: v.avatar,
     carConsumption: v.carConsumption,
+    defaultVehicleLabel:
+      v.defaultVehicleLabel != null && String(v.defaultVehicleLabel).trim()
+        ? String(v.defaultVehicleLabel).trim()
+        : undefined,
+    defaultFuelPricePerLiter: (() => {
+      const x = v.defaultFuelPricePerLiter;
+      if (x == null) return undefined;
+      if (typeof x === 'number' && !Number.isNaN(x)) return String(x);
+      const s = String(x).trim();
+      return s || undefined;
+    })(),
     friends: v.friends || [],
     expenseTypes: mergeDefaultExpenseTypes(parseExpenseTypes(v.expenseTypes)),
   };
@@ -152,6 +167,8 @@ export async function updateUserProfile(
   data: {
     displayName?: string;
     carConsumption?: string;
+    defaultVehicleLabel?: string;
+    defaultFuelPricePerLiter?: string;
     expenseTypes?: ExpenseType[];
     /** E.164; rehber eşleştirmesi için */
     phoneNumber?: string;
@@ -165,6 +182,10 @@ export async function updateUserProfile(
     updates.displayNameLower = normalizeNameSearchKey(t);
   }
   if (data.carConsumption !== undefined) updates.carConsumption = data.carConsumption;
+  if (data.defaultVehicleLabel !== undefined) updates.defaultVehicleLabel = data.defaultVehicleLabel;
+  if (data.defaultFuelPricePerLiter !== undefined) {
+    updates.defaultFuelPricePerLiter = data.defaultFuelPricePerLiter;
+  }
   if (data.expenseTypes !== undefined) updates.expenseTypes = mergeDefaultExpenseTypes(data.expenseTypes);
   if (data.phoneNumber !== undefined) {
     const p = String(data.phoneNumber).trim();

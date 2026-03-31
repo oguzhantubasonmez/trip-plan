@@ -64,6 +64,8 @@ export type Stop = {
   placeRating?: number;
   /** Google’daki değerlendirme sayısı */
   placeUserRatingsTotal?: number;
+  /** Google Places `place_id` — sunumda yorum/foto/özet için (Places aramasından eklenince dolu) */
+  googlePlaceId?: string;
   coords?: { latitude: number; longitude: number };
   arrivalTime?: string;
   departureTime?: string;

@@ -260,6 +260,7 @@ function firestorePayloadForCopiedStop(params: {
   ) {
     data.placeUserRatingsTotal = Math.round(s.placeUserRatingsTotal);
   }
+  if (s.googlePlaceId?.trim()) data.googlePlaceId = s.googlePlaceId.trim();
 
   const fromList = Array.isArray(s.extraExpenses) && s.extraExpenses.length > 0;
   if (fromList) {
@@ -504,6 +505,7 @@ export async function getStopsForTrip(tripId: string): Promise<Stop[]> {
       stopDate: v.stopDate,
       placeRating: v.placeRating,
       placeUserRatingsTotal: v.placeUserRatingsTotal,
+      googlePlaceId: typeof v.googlePlaceId === 'string' && v.googlePlaceId.trim() ? v.googlePlaceId.trim() : undefined,
       coords: normalizeStopCoords(v.coords),
       arrivalTime: v.arrivalTime,
       departureTime: v.departureTime,
@@ -680,6 +682,7 @@ export async function addStop(params: {
   legFromPrevious?: LegFromPrevious;
   placeRating?: number;
   placeUserRatingsTotal?: number;
+  googlePlaceId?: string;
 }): Promise<string> {
   const ref = doc(collection(db, STOPS));
   const data: Record<string, any> = {
@@ -711,6 +714,7 @@ export async function addStop(params: {
   ) {
     data.placeUserRatingsTotal = Math.round(params.placeUserRatingsTotal);
   }
+  if (params.googlePlaceId?.trim()) data.googlePlaceId = params.googlePlaceId.trim();
   await setDoc(ref, data);
   return ref.id;
 }
@@ -835,6 +839,7 @@ export async function updateStopFromPayload(
     coords?: { latitude: number; longitude: number };
     placeRating?: number | null;
     placeUserRatingsTotal?: number | null;
+    googlePlaceId?: string | null;
   },
   editedByUid?: string
 ): Promise<void> {
@@ -890,6 +895,12 @@ export async function updateStopFromPayload(
       payload.placeUserRatingsTotal < 0
         ? null
         : Math.round(payload.placeUserRatingsTotal);
+  }
+  if (payload.googlePlaceId !== undefined) {
+    updates.googlePlaceId =
+      payload.googlePlaceId == null || !String(payload.googlePlaceId).trim()
+        ? null
+        : String(payload.googlePlaceId).trim();
   }
   stampStopEditor(updates, editedByUid);
   await updateDoc(ref, updates);

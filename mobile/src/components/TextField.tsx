@@ -7,7 +7,7 @@ export function TextField(props: {
   label: string;
   value: string;
   placeholder?: string;
-  keyboardType?: 'default' | 'email-address' | 'phone-pad' | 'number-pad';
+  keyboardType?: 'default' | 'email-address' | 'phone-pad' | 'number-pad' | 'decimal-pad';
   onChangeText: (v: string) => void;
   helperText?: string;
   errorText?: string;

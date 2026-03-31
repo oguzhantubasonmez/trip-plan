@@ -102,6 +102,218 @@ function formatGoogleMapsKeyError(message: string): string {
 
 const AUTOCOMPLETE_URL = 'https://maps.googleapis.com/maps/api/place/autocomplete/json';
 const DETAILS_URL = 'https://maps.googleapis.com/maps/api/place/details/json';
+const FIND_PLACE_FROM_TEXT_URL = 'https://maps.googleapis.com/maps/api/place/findplacefromtext/json';
+const PLACE_PHOTO_URL = 'https://maps.googleapis.com/maps/api/place/photo';
+
+export type PlacePresentationReview = {
+  rating: number;
+  text: string;
+  relativeTimeDescription?: string;
+};
+
+/** Sunum / özet için Places Details’ten çekilen alanlar (resmi API; HTML kazıma yok). */
+export type PlacePresentationRich = {
+  heroImageUrl?: string;
+  editorialOverview?: string;
+  reviewBest?: PlacePresentationReview;
+  reviewWorst?: PlacePresentationReview;
+};
+
+function placePhotoUrlFromReference(photoReference: string, maxWidth: number): string {
+  const key = requireGoogleMapsApiKey();
+  const params = new URLSearchParams({
+    maxwidth: String(maxWidth),
+    photo_reference: photoReference,
+    key,
+  });
+  return `${PLACE_PHOTO_URL}?${params.toString()}`;
+}
+
+/**
+ * Yer adı + konum ile `place_id` (yalnızca native: tarayıcıda REST CORS engeli).
+ * Mevcut duraklarda `googlePlaceId` yoksa sunumda tek seferlik çözüm için kullanılır.
+ */
+export async function findPlaceIdFromTextQuery(
+  textQuery: string,
+  latitude: number,
+  longitude: number,
+  radiusMeters = 50000
+): Promise<string | null> {
+  if (Platform.OS === 'web') return null;
+  const q = textQuery.trim();
+  if (!q) return null;
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  const key = requireGoogleMapsApiKey();
+  const params = new URLSearchParams({
+    input: q,
+    inputtype: 'textquery',
+    fields: 'place_id',
+    locationbias: `circle:${latitude},${longitude}|${Math.max(500, Math.min(radiusMeters, 50000))}`,
+    language: 'tr',
+    key,
+  });
+  const res = await fetch(`${FIND_PLACE_FROM_TEXT_URL}?${params.toString()}`);
+  const data = await res.json();
+  if (data.status !== 'OK' || !data.candidates?.length) return null;
+  const pid = data.candidates[0]?.place_id;
+  return typeof pid === 'string' && pid.trim() ? pid.trim() : null;
+}
+
+function pickReviewExtremes(
+  raw: { rating?: number; text?: string; relative_time_description?: string }[]
+): { best?: PlacePresentationReview; worst?: PlacePresentationReview } {
+  const withText: PlacePresentationReview[] = [];
+  for (const r of raw) {
+    const text = typeof r.text === 'string' ? r.text.trim() : '';
+    if (!text) continue;
+    const rating = typeof r.rating === 'number' && !Number.isNaN(r.rating) ? r.rating : 0;
+    const rel =
+      typeof r.relative_time_description === 'string' && r.relative_time_description.trim()
+        ? r.relative_time_description.trim()
+        : undefined;
+    withText.push({ rating, text, ...(rel ? { relativeTimeDescription: rel } : {}) });
+  }
+  if (withText.length === 0) return {};
+  const byDesc = [...withText].sort((a, b) => b.rating - a.rating);
+  const byAsc = [...withText].sort((a, b) => a.rating - b.rating);
+  const best = byDesc[0]!;
+  const worst = byAsc[0]!;
+  if (best.text === worst.text && best.rating === worst.rating) {
+    return { best, worst: undefined };
+  }
+  return { best, worst };
+}
+
+async function fetchPlacePresentationRichNative(placeId: string): Promise<PlacePresentationRich | null> {
+  const key = requireGoogleMapsApiKey();
+  const params = new URLSearchParams({
+    place_id: placeId,
+    key,
+    language: 'tr',
+    fields: 'photos,editorial_summary,reviews,name,formatted_address',
+  });
+  const res = await fetch(`${DETAILS_URL}?${params.toString()}`);
+  const data = await res.json();
+  if (data.status !== 'OK') {
+    return null;
+  }
+  const r = data.result || {};
+  const ed = r.editorial_summary;
+  let editorialOverview =
+    typeof ed?.overview === 'string' && ed.overview.trim() ? ed.overview.trim() : undefined;
+  const photos = Array.isArray(r.photos) ? r.photos : [];
+  const pref = photos[0]?.photo_reference;
+  const heroImageUrl =
+    typeof pref === 'string' && pref.trim() ? placePhotoUrlFromReference(pref.trim(), 1200) : undefined;
+  const reviewsRaw = Array.isArray(r.reviews) ? r.reviews : [];
+  const { best, worst } = pickReviewExtremes(reviewsRaw);
+  const placeName = typeof r.name === 'string' && r.name.trim() ? r.name.trim() : undefined;
+  const addr = typeof r.formatted_address === 'string' && r.formatted_address.trim() ? r.formatted_address.trim() : undefined;
+  if (!editorialOverview && !heroImageUrl && !best && !worst) {
+    const parts = [placeName, addr].filter(Boolean);
+    if (parts.length > 0) {
+      editorialOverview = parts.join(' — ');
+    }
+  }
+  if (!editorialOverview && !heroImageUrl && !best && !worst) return null;
+  return {
+    ...(editorialOverview ? { editorialOverview } : {}),
+    ...(heroImageUrl ? { heroImageUrl } : {}),
+    ...(best ? { reviewBest: best } : {}),
+    ...(worst ? { reviewWorst: worst } : {}),
+  };
+}
+
+function reviewTextFromJsReview(rev: any): string {
+  if (typeof rev?.text === 'string') return rev.text.trim();
+  const t = rev?.text?.text;
+  return typeof t === 'string' ? t.trim() : '';
+}
+
+function pickReviewExtremesFromJs(reviews: any[]): { best?: PlacePresentationReview; worst?: PlacePresentationReview } {
+  const withText: PlacePresentationReview[] = [];
+  for (const rev of reviews) {
+    const text = reviewTextFromJsReview(rev);
+    if (!text) continue;
+    const rt = typeof rev?.rating === 'number' && !Number.isNaN(rev.rating) ? rev.rating : 0;
+    withText.push({ rating: rt, text, relativeTimeDescription: undefined });
+  }
+  if (withText.length === 0) return {};
+  const byDesc = [...withText].sort((a, b) => b.rating - a.rating);
+  const byAsc = [...withText].sort((a, b) => a.rating - b.rating);
+  const best = byDesc[0]!;
+  const worst = byAsc[0]!;
+  if (best.text === worst.text && best.rating === worst.rating) {
+    return { best, worst: undefined };
+  }
+  return { best, worst };
+}
+
+async function fetchPlacePresentationRichWeb(placeId: string): Promise<PlacePresentationRich | null> {
+  const placesLib = await resolvePlacesLibrary();
+  const Place = placesLib.Place;
+  if (!Place) return null;
+  try {
+    const place = new Place({ id: placeId });
+    await place.fetchFields({
+      fields: ['photos', 'reviews', 'editorialSummary', 'displayName', 'formattedAddress'],
+    });
+    const es: any = (place as any).editorialSummary;
+    let editorialOverview =
+      typeof es === 'string'
+        ? es.trim() || undefined
+        : typeof es?.text === 'string' && es.text.trim()
+          ? es.text.trim()
+          : undefined;
+    let heroImageUrl: string | undefined;
+    const photos = (place as any).photos;
+    if (Array.isArray(photos) && photos[0]) {
+      const ph = photos[0];
+      try {
+        if (typeof ph.getURI === 'function') {
+          heroImageUrl = ph.getURI({ maxWidth: 1200 }) ?? undefined;
+        } else if (typeof ph.getUrl === 'function') {
+          heroImageUrl = ph.getUrl({ maxWidth: 1200 }) ?? undefined;
+        }
+      } catch {
+        heroImageUrl = undefined;
+      }
+    }
+    const revs = Array.isArray((place as any).reviews) ? (place as any).reviews : [];
+    const { best, worst } = pickReviewExtremesFromJs(revs);
+    const dn =
+      typeof (place as any).displayName === 'string' && (place as any).displayName.trim()
+        ? (place as any).displayName.trim()
+        : undefined;
+    const fa =
+      typeof (place as any).formattedAddress === 'string' && (place as any).formattedAddress.trim()
+        ? (place as any).formattedAddress.trim()
+        : undefined;
+    if (!editorialOverview && !heroImageUrl && !best && !worst) {
+      const parts = [dn, fa].filter(Boolean);
+      if (parts.length) editorialOverview = parts.join(' — ');
+    }
+    if (!editorialOverview && !heroImageUrl && !best && !worst) return null;
+    return {
+      ...(editorialOverview ? { editorialOverview } : {}),
+      ...(heroImageUrl ? { heroImageUrl } : {}),
+      ...(best ? { reviewBest: best } : {}),
+      ...(worst ? { reviewWorst: worst } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Place Details: editorial özet, ilk foto URL’i, en yüksek / en düşük metinli yorumlar. */
+export async function fetchPlacePresentationRich(placeId: string): Promise<PlacePresentationRich | null> {
+  const id = placeId.trim();
+  if (!id) return null;
+  if (Platform.OS === 'web') {
+    return fetchPlacePresentationRichWeb(id);
+  }
+  return fetchPlacePresentationRichNative(id);
+}
 
 /* ---------- Native: doğrudan REST ---------- */
 

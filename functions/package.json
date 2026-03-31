@@ -8,7 +8,8 @@
   "scripts": {
     "build": "tsc",
     "serve": "npm run build && firebase emulators:start --only functions",
-    "deploy": "firebase deploy --only functions"
+    "deploy": "firebase deploy --only functions",
+    "backfill:google-place-id": "node scripts/backfill-google-place-id.cjs"
   },
   "dependencies": {
     "firebase-admin": "^12.7.0",
