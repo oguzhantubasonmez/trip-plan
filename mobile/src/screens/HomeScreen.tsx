@@ -1441,7 +1441,7 @@ function createHomeStyles(theme: AppTheme) {
     },
     tripStatusChipWrap: { flexShrink: 0, paddingTop: 2 },
     tripTitlePressable: { flex: 1, minWidth: 0 },
-    tripTitle: { color: theme.color.text, fontSize: theme.font.h2, fontWeight: '800' },
+    tripTitle: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '800' },
     tripScheduleMain: {
       color: theme.color.text,
       fontSize: theme.font.body,
