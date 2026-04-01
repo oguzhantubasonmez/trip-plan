@@ -21,7 +21,7 @@ const STEPS: Step[] = [
     tab: 'HomeTab',
     title: 'RouteWise’e hoş geldin',
     body:
-      'Gezilerini duraklar, süre, masraf ve yakıt ile planla; arkadaşlarınla paylaş. Rota sunumu ve Yer keşfet ile rotanı ve tek tek yerleri görsel olarak da keşfedebilirsin. Bu kısa turda alt menüdeki ana bölümleri göreceksin.',
+      'Gezilerini duraklar, süre, masraf ve yakıt ile planla; arkadaşlarınla paylaş. Rota sunumu ve Yer keşfet ile rotanı ve tek tek yerleri görsel olarak keşfet; kaydettiğin yerler Keşfet sekmesinde özet kartlarla durur. Bu turda alt menüdeki ana bölümleri göreceksin.',
   },
   {
     tab: 'HomeTab',
@@ -33,19 +33,19 @@ const STEPS: Step[] = [
     tab: 'DiscoverTab',
     title: 'Keşfet sekmesi',
     body:
-      'Skor, sıralama ve topluluk anketleri bu sekmede. Ana sayfadaki Yer keşfet tek bir yeri arayıp sunumla incelemek içindir; burası ise paylaşım ve rekabet odaklıdır. Arkadaşlarınla bağlantı için Keşfet ve Ana sayfa kartlarını kullanabilirsin.',
+      'Skor, sıralama ve topluluk anketleri burada. «Kaydettiğin yerler» satırında profilden kaydettiğin mekânlar görsel özet ve yorum özetiyle listelenir; özetler cihazda önbelleğe alınır. Bir karta uzun basarak kaydı kaldırabilirsin. Ana sayfadaki Yer keşfet ise yeni yer aramak ve sunum açmak içindir. Arkadaşlar için Keşfet ve Ana sayfa kartlarını kullan.',
   },
   {
     tab: 'ProfileTab',
     title: 'Profil',
     body:
-      'Adın, telefonun, masraf türlerin ve tema seçimin burada. İstersen Açık, Koyu, Okyanus, Gün batımı veya Orman temalarından birini seç.',
+      'Adın, telefonun, masraf türlerin ve tema seçimin burada. Kaydettiğin yerler listesi de profilde; Yer keşfet içinden «Kaydet» ile eklediğin mekânlar hem profilde hem Keşfet’teki kartlarda görünür. İstersen Açık, Koyu, Okyanus, Gün batımı veya Orman temalarından birini seç.',
   },
   {
     tab: 'HomeTab',
     title: 'Hazırsın',
     body:
-      'Alt menüden istediğin zaman sekmeler arasında geçebilirsin. Planını kur, rota sunumu ve yer keşfet ile deneyimi tamamla. İyi yolculuklar.',
+      'Alt menüden sekmeler arasında geçebilirsin. Planını kur; rota sunumu, yer keşfet ve Keşfet’teki kayıtlı yer kartlarıyla deneyimi tamamla. İyi yolculuklar.',
   },
 ];
 

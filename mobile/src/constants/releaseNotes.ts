@@ -4,6 +4,12 @@
  * Bu sürüm için kayıt yoksa veya metin boşsa modal gösterilmez.
  */
 export const RELEASE_NOTES_BY_VERSION: Record<string, string> = {
+  '1.0.3': [
+    '• Keşfet: Profilde kaydettiğin yerler bu sekmede yatay kartlarla — fotoğraf, kısa özet ve yorum özeti.',
+    '• Kayıtlı yer özetleri cihazda önbelleğe alınır; liste hızlı açılır, eksikler sırayla tamamlanır.',
+    '• Keşfet’te bir karta uzun basarak kaydı silebilirsin (profil ve yerel özet önbelleği güncellenir).',
+    '• Yer keşfet modalı, Keşfet kartından açılınca mümkünse önbellekten anında sunum gösterir.',
+  ].join('\n'),
   '1.0.2': [
     '• Rota sunumu: gezi detayından durakları üstte görsel, altta özet ve yorumlarla sırayla gez.',
     '• Yer keşfet: ana sayfada yer ara; seçtiğinde rota sunumuyla aynı düzende tam ekran inceleme.',

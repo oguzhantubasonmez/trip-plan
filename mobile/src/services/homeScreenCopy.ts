@@ -23,8 +23,9 @@ export const HOME_SCREEN_COPY_DOC_ID = 'home';
 
 export const DEFAULT_HOME_SCREEN_COPY = {
   anasayfa_baslik: 'Nereye gidiyoruz?',
-  altmetin1: 'Duraklar, süre, masraf ve yakıt — arkadaşlarınla birlikte planla.',
-  altmetin2: 'Bildirimler sağ üstte.',
+  altmetin1:
+    'Duraklar, süre, masraf ve yakıt — arkadaşlarınla birlikte planla. Yer keşfet ve rota sunumuyla görsel özet.',
+  altmetin2: 'Kaydettiğin yerler Keşfet sekmesinde özet kartlarla. Bildirimler sağ üstte.',
 } as const;
 
 export type HomeScreenCopy = {
