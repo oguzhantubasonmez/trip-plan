@@ -3,6 +3,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  Image,
   Modal,
   Platform,
   Pressable,
@@ -20,7 +22,9 @@ import {
   type DiscoverScreenPayload,
 } from '../services/discover';
 import { filterMutualFriendUids } from '../services/friends';
-import { getUserProfile } from '../services/userProfile';
+import { getPlaceDetails } from '../services/places';
+import { getUserProfile, removeSavedPlaceForUser, type SavedPlaceEntry } from '../services/userProfile';
+import { PlaceDiscoverModal } from '../components/PlaceDiscoverModal';
 import { PollVoteNamesModal } from '../components/PollVoteNamesModal';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
@@ -34,9 +38,29 @@ import {
 } from '../types/gamification';
 import { useAppTheme, useThemeMode } from '../ThemeContext';
 import type { AppTheme } from '../theme';
+import type { DiscoverSecondStopPayload } from '../navigation/types';
+import type { StopPresentationPayload } from '../utils/presentationModel';
+import { buildDiscoverSpotlightPayload } from '../utils/discoverSpotlightPayload';
 import { POLL_MAX_OPTIONS, POLL_MIN_OPTIONS } from '../utils/pollFirestore';
+import {
+  readSavedPlaceDiscoverCache,
+  removeSavedPlaceDiscoverCache,
+  writeSavedPlaceDiscoverCache,
+} from '../utils/savedPlacesDiscoverCache';
+import { fetchPresentationWebForPlaceSpotlight } from '../utils/stopWebEnrichment';
 
-export function DiscoverScreen(props: { onOpenFriends: () => void; focusPollId?: string }) {
+type SavedRowState = {
+  entry: SavedPlaceEntry;
+  status: 'loading' | 'ready' | 'error';
+  payload?: StopPresentationPayload;
+};
+
+export function DiscoverScreen(props: {
+  onOpenFriends: () => void;
+  focusPollId?: string;
+  onNavigateCreateTripWithSecondStop: (payload: DiscoverSecondStopPayload) => void;
+  onOpenTrip: (tripId: string) => void;
+}) {
   const theme = useAppTheme();
   const { mode } = useThemeMode();
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -65,14 +89,24 @@ export function DiscoverScreen(props: { onOpenFriends: () => void; focusPollId?:
   const [pollTipError, setPollTipError] = useState<string | null>(null);
   const pollTipHoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const [savedRows, setSavedRows] = useState<SavedRowState[]>([]);
+  const [placeDiscoverOpen, setPlaceDiscoverOpen] = useState(false);
+  const [discoverSeedPlaceId, setDiscoverSeedPlaceId] = useState<string | null>(null);
+  const [discoverSeedPayload, setDiscoverSeedPayload] = useState<StopPresentationPayload | null>(null);
+
+  const clearDiscoverSeed = useCallback(() => {
+    setDiscoverSeedPlaceId(null);
+    setDiscoverSeedPayload(null);
+  }, []);
+
   const heroGrad = useMemo((): [string, string, string] => {
-    if (mode === 'dark') return ['#7C3AED', '#DB2777', '#F59E0B'];
-    return ['#38BDF8', '#A78BFA', '#FB923C'];
+    if (mode === 'light') return ['#38BDF8', '#A78BFA', '#FB923C'];
+    return ['#7C3AED', '#DB2777', '#F59E0B'];
   }, [mode]);
 
   const heroGradEnd = useMemo((): [string, string] => {
-    if (mode === 'dark') return ['#1E1B4B', '#312E81'];
-    return ['#E0F2FE', '#FFF7ED'];
+    if (mode === 'light') return ['#E0F2FE', '#FFF7ED'];
+    return ['#1E1B4B', '#312E81'];
   }, [mode]);
 
   const load = useCallback(async () => {
@@ -107,6 +141,104 @@ export function DiscoverScreen(props: { onOpenFriends: () => void; focusPollId?:
       setLoading(true);
       void load();
     }, [load])
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!uid) {
+        setSavedRows([]);
+        return;
+      }
+      let cancelled = false;
+      void (async () => {
+        const profile = await getUserProfile(uid);
+        if (cancelled) return;
+        const list = profile?.savedPlaces ?? [];
+        const initial: SavedRowState[] = [];
+        for (const entry of list) {
+          const cached = await readSavedPlaceDiscoverCache(entry.googlePlaceId);
+          initial.push(
+            cached
+              ? { entry, status: 'ready', payload: cached }
+              : { entry, status: 'loading' }
+          );
+        }
+        if (!cancelled) setSavedRows(initial);
+
+        for (const entry of list) {
+          if (cancelled) break;
+          const id = entry.googlePlaceId;
+          const hadCache = initial.find((r) => r.entry.googlePlaceId === id)?.payload;
+          if (hadCache) continue;
+          try {
+            const details = await getPlaceDetails(id);
+            const web = await fetchPresentationWebForPlaceSpotlight({
+              locationName: details.name,
+              coords: { latitude: details.latitude, longitude: details.longitude },
+              googlePlaceId: id,
+              placeRating:
+                details.rating != null && details.rating > 0 ? details.rating : undefined,
+              placeUserRatingsTotal:
+                details.userRatingsTotal != null && details.userRatingsTotal > 0
+                  ? details.userRatingsTotal
+                  : undefined,
+            });
+            const payload = buildDiscoverSpotlightPayload(details, id, web);
+            await writeSavedPlaceDiscoverCache(id, payload);
+            if (!cancelled) {
+              setSavedRows((prev) =>
+                prev.map((r) =>
+                  r.entry.googlePlaceId === id ? { ...r, status: 'ready', payload } : r
+                )
+              );
+            }
+          } catch {
+            if (!cancelled) {
+              setSavedRows((prev) =>
+                prev.map((r) =>
+                  r.entry.googlePlaceId === id ? { ...r, status: 'error' } : r
+                )
+              );
+            }
+          }
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [uid])
+  );
+
+  const confirmRemoveSaved = useCallback(
+    (row: SavedRowState) => {
+      const name = row.entry.displayName?.trim() || row.payload?.title || 'Bu yer';
+      Alert.alert(
+        'Kaydı sil',
+        `“${name}” kayıtlı yerlerden çıkarılsın mı? Yerel özet önbelleği de silinir.`,
+        [
+          { text: 'İptal', style: 'cancel' },
+          {
+            text: 'Sil',
+            style: 'destructive',
+            onPress: () => {
+              if (!uid) return;
+              void (async () => {
+                try {
+                  await removeSavedPlaceForUser(uid, row.entry.googlePlaceId);
+                  await removeSavedPlaceDiscoverCache(row.entry.googlePlaceId);
+                  setSavedRows((prev) =>
+                    prev.filter((r) => r.entry.googlePlaceId !== row.entry.googlePlaceId)
+                  );
+                } catch (e: any) {
+                  Alert.alert('Hata', e?.message || 'Silinemedi.');
+                }
+              })();
+            },
+          },
+        ]
+      );
+    },
+    [uid]
   );
 
   async function handleVote(choiceId: string) {
@@ -337,6 +469,94 @@ export function DiscoverScreen(props: { onOpenFriends: () => void; focusPollId?:
                 </View>
               ))}
             </ScrollView>
+
+            {savedRows.length > 0 ? (
+              <View style={styles.savedSection}>
+                <Text style={styles.sectionLabel}>Kaydettiğin yerler</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.savedScroll}
+                >
+                  {savedRows.map((row) => {
+                    const p = row.payload;
+                    const title = p?.title?.trim() || row.entry.displayName?.trim() || 'Kayıtlı yer';
+                    const summaryLine = p?.summaryBullets?.[0]?.trim();
+                    const reviewLine = p?.reviewBullets?.[0]?.trim();
+                    const subLine =
+                      reviewLine && summaryLine
+                        ? `${summaryLine.slice(0, 72)}${summaryLine.length > 72 ? '…' : ''}`
+                        : summaryLine || reviewLine || row.entry.formattedAddress?.trim() || '';
+                    const rating =
+                      p?.placeRating != null && p.placeRating > 0
+                        ? `★ ${p.placeRating.toFixed(1)}${
+                            p.placeUserRatingsTotal != null && p.placeUserRatingsTotal > 0
+                              ? ` (${p.placeUserRatingsTotal})`
+                              : ''
+                          }`
+                        : '';
+                    return (
+                      <Pressable
+                        key={row.entry.googlePlaceId}
+                        onPress={() => {
+                          setDiscoverSeedPlaceId(row.entry.googlePlaceId);
+                          setDiscoverSeedPayload(row.payload ?? null);
+                          setPlaceDiscoverOpen(true);
+                        }}
+                        onLongPress={() => confirmRemoveSaved(row)}
+                        style={({ pressed }) => [styles.savedCard, theme.shadowSoft, pressed && { opacity: 0.92 }]}
+                      >
+                        {row.status === 'loading' ? (
+                          <View style={[styles.savedHero, styles.savedHeroLoading]}>
+                            <ActivityIndicator color={theme.color.primary} />
+                          </View>
+                        ) : row.status === 'error' ? (
+                          <View style={[styles.savedHero, styles.savedHeroLoading]}>
+                            <Text style={styles.savedErrorEmoji}>⚠️</Text>
+                          </View>
+                        ) : p?.heroImageUrl ? (
+                          <Image
+                            source={{ uri: p.heroImageUrl }}
+                            style={styles.savedHero}
+                            resizeMode="cover"
+                            accessibilityIgnoresInvertColors
+                          />
+                        ) : (
+                          <View style={[styles.savedHero, styles.savedHeroPlaceholder]}>
+                            <Text style={styles.savedHeroPlaceholderEmoji}>📍</Text>
+                          </View>
+                        )}
+                        <View style={styles.savedBody}>
+                          <Text style={styles.savedTitle} numberOfLines={2}>
+                            {title}
+                          </Text>
+                          {rating ? <Text style={styles.savedMeta}>{rating}</Text> : null}
+                          {subLine ? (
+                            <Text style={styles.savedLine} numberOfLines={2}>
+                              {subLine}
+                            </Text>
+                          ) : row.status === 'loading' ? (
+                            <Text style={styles.savedLine} numberOfLines={1}>
+                              Özet yükleniyor…
+                            </Text>
+                          ) : row.status === 'error' ? (
+                            <Text style={styles.savedLine} numberOfLines={2}>
+                              Özet alınamadı; kısa dokunuşla yeniden dene.
+                            </Text>
+                          ) : null}
+                          {reviewLine && summaryLine ? (
+                            <Text style={styles.savedReviewTease} numberOfLines={2}>
+                              “{reviewLine.slice(0, 90)}
+                              {reviewLine.length > 90 ? '…' : ''}”
+                            </Text>
+                          ) : null}
+                        </View>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            ) : null}
 
             <LinearGradient colors={heroGradEnd} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.softBand}>
               <Text style={styles.bandTitle}>Skor barı</Text>
@@ -615,6 +835,27 @@ export function DiscoverScreen(props: { onOpenFriends: () => void; focusPollId?:
         <View style={{ height: theme.space.xl }} />
       </ScrollView>
 
+      <PlaceDiscoverModal
+        visible={placeDiscoverOpen}
+        seedPlaceId={discoverSeedPlaceId}
+        seedInitialPayload={discoverSeedPayload}
+        onSeedConsumed={clearDiscoverSeed}
+        onClose={() => {
+          setPlaceDiscoverOpen(false);
+          clearDiscoverSeed();
+        }}
+        onNavigateCreateTripWithSecondStop={(p) => {
+          setPlaceDiscoverOpen(false);
+          clearDiscoverSeed();
+          props.onNavigateCreateTripWithSecondStop(p);
+        }}
+        onOpenTrip={(tripId) => {
+          setPlaceDiscoverOpen(false);
+          clearDiscoverSeed();
+          props.onOpenTrip(tripId);
+        }}
+      />
+
       <Modal
         visible={createPollOpen}
         transparent
@@ -835,6 +1076,32 @@ function createStyles(theme: AppTheme) {
       color: theme.color.text,
       fontSize: theme.font.tiny,
       fontWeight: '800',
+    },
+    savedSection: { marginBottom: theme.space.md },
+    savedScroll: { gap: 12, paddingRight: theme.space.md, paddingBottom: theme.space.xs },
+    savedCard: {
+      width: 268,
+      borderRadius: theme.radius.lg,
+      backgroundColor: theme.color.surface,
+      borderWidth: 1,
+      borderColor: theme.color.border,
+      overflow: 'hidden',
+    },
+    savedHero: { width: '100%', height: 112, backgroundColor: theme.color.inputBg },
+    savedHeroLoading: { alignItems: 'center', justifyContent: 'center' },
+    savedHeroPlaceholder: { alignItems: 'center', justifyContent: 'center' },
+    savedHeroPlaceholderEmoji: { fontSize: 36, opacity: 0.85 },
+    savedErrorEmoji: { fontSize: 28 },
+    savedBody: { padding: theme.space.sm },
+    savedTitle: { color: theme.color.text, fontSize: theme.font.small, fontWeight: '900' },
+    savedMeta: { color: theme.color.muted, fontSize: 10, fontWeight: '700', marginTop: 4 },
+    savedLine: { color: theme.color.textSecondary, fontSize: theme.font.tiny, marginTop: 6, lineHeight: 18 },
+    savedReviewTease: {
+      color: theme.color.muted,
+      fontSize: theme.font.tiny,
+      fontStyle: 'italic',
+      marginTop: 6,
+      lineHeight: 18,
     },
     softBand: {
       borderRadius: theme.radius.xl,

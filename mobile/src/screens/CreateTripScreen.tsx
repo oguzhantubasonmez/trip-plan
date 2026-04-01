@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useRoute, type RouteProp } from '@react-navigation/native';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -15,6 +16,7 @@ import { Screen } from '../components/Screen';
 import { TextField } from '../components/TextField';
 import { TimePickerField } from '../components/TimePickerField';
 import { auth } from '../lib/firebase';
+import type { HomeStackParamList } from '../navigation/types';
 import { addStop, createTrip } from '../services/trips';
 import type { PlacesSearchMode } from '../services/places';
 import { useAppTheme } from '../ThemeContext';
@@ -25,6 +27,15 @@ export function CreateTripScreen(props: {
   onCreated: (tripId: string, opts?: { skipAddPlaceModal?: boolean }) => void;
   onBack: () => void;
 }) {
+  const route = useRoute<RouteProp<HomeStackParamList, 'CreateTrip'>>();
+  const [secondStopFromDiscover, setSecondStopFromDiscover] = useState(
+    () => route.params?.secondStopFromDiscover ?? null
+  );
+  useEffect(() => {
+    const p = route.params?.secondStopFromDiscover;
+    setSecondStopFromDiscover(p ?? null);
+  }, [route.params?.secondStopFromDiscover]);
+
   const appTheme = useAppTheme();
   const styles = useMemo(() => createCreateTripStyles(appTheme), [appTheme]);
   const [title, setTitle] = useState('');
@@ -54,8 +65,15 @@ export function CreateTripScreen(props: {
   async function submit() {
     setError(undefined);
     let tripTitle = title.trim();
+    if (!tripTitle && firstStop && secondStopFromDiscover) {
+      tripTitle = `${firstStop.locationName} → ${secondStopFromDiscover.locationName}`;
+    }
     if (!tripTitle && firstStop) {
       tripTitle = firstStop.locationName;
+    }
+    if (secondStopFromDiscover && !firstStop) {
+      setError('Yer keşfet’ten gelen rota için önce başlangıç noktasını (1. durak) seçin.');
+      return;
     }
     if (!tripTitle) {
       setError('Rota adı girin veya aşağıdan bir başlangıç noktası seçin.');
@@ -115,7 +133,27 @@ export function CreateTripScreen(props: {
             : {}),
         });
       }
-      props.onCreated(tripId, { skipAddPlaceModal: !!firstStop });
+      if (secondStopFromDiscover && firstStop) {
+        await addStop({
+          tripId,
+          locationName: secondStopFromDiscover.locationName.trim(),
+          createdBy: uid,
+          status: 'approved',
+          coords: secondStopFromDiscover.coords,
+          order: 1,
+          ...(secondStopFromDiscover.googlePlaceId?.trim()
+            ? { googlePlaceId: secondStopFromDiscover.googlePlaceId.trim() }
+            : {}),
+          ...(secondStopFromDiscover.placeRating != null && secondStopFromDiscover.placeRating > 0
+            ? { placeRating: secondStopFromDiscover.placeRating }
+            : {}),
+          ...(secondStopFromDiscover.placeUserRatingsTotal != null &&
+          secondStopFromDiscover.placeUserRatingsTotal > 0
+            ? { placeUserRatingsTotal: secondStopFromDiscover.placeUserRatingsTotal }
+            : {}),
+        });
+      }
+      props.onCreated(tripId, { skipAddPlaceModal: !!(firstStop || secondStopFromDiscover) });
     } catch (e: any) {
       setError(e?.message || 'Rota oluşturulamadı.');
     } finally {
@@ -150,7 +188,18 @@ export function CreateTripScreen(props: {
           </View>
 
           <View style={styles.card}>
-          <Text style={styles.blockTitle}>Başlangıç noktası (isteğe bağlı)</Text>
+          {secondStopFromDiscover ? (
+            <View style={styles.secondStopBanner}>
+              <Text style={styles.secondStopBannerTitle}>İkinci durak hazır</Text>
+              <Text style={styles.secondStopBannerText}>
+                «{secondStopFromDiscover.locationName}» rota oluşturulunca 2. durak olarak eklenecek. Aşağıdan 1.
+                durağı (başlangıç) seçin — zorunlu.
+              </Text>
+            </View>
+          ) : null}
+          <Text style={styles.blockTitle}>
+            {secondStopFromDiscover ? 'Başlangıç noktası (1. durak) — zorunlu' : 'Başlangıç noktası (isteğe bağlı)'}
+          </Text>
           {firstStop ? (
             <View style={styles.selectedPlace}>
               <Text style={styles.selectedPlaceText}>{firstStop.locationName}</Text>
@@ -270,6 +319,16 @@ function createCreateTripStyles(t: AppTheme) {
       ...t.shadowCard,
     },
     blockTitle: { color: t.color.text, fontSize: t.font.body, fontWeight: '700', marginBottom: t.space.sm },
+    secondStopBanner: {
+      marginBottom: t.space.md,
+      padding: t.space.md,
+      borderRadius: t.radius.md,
+      backgroundColor: t.color.primarySoft,
+      borderWidth: 1,
+      borderColor: t.color.cardBorderPrimary,
+    },
+    secondStopBannerTitle: { color: t.color.primaryDark, fontSize: t.font.small, fontWeight: '900', marginBottom: 6 },
+    secondStopBannerText: { color: t.color.text, fontSize: t.font.small, lineHeight: 20, fontWeight: '600' },
     selectedPlace: {
       flexDirection: 'row',
       alignItems: 'center',

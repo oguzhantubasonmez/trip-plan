@@ -1,10 +1,19 @@
 import type { NavigatorScreenParams } from '@react-navigation/native';
 
+/** Yer keşfet → Yeni rota: 2. durak olarak önceden seçilen yer. */
+export type DiscoverSecondStopPayload = {
+  locationName: string;
+  coords: { latitude: number; longitude: number };
+  googlePlaceId?: string;
+  placeRating?: number;
+  placeUserRatingsTotal?: number;
+};
+
 export type HomeStackParamList = {
-  Home: undefined;
+  Home: { openDiscoverPlaceId?: string } | undefined;
   /** Opsiyonel başlangıç koordinatları (rota durağından açılırsa) */
   WeatherForecast: { latitude?: number; longitude?: number; label?: string } | undefined;
-  CreateTrip: undefined;
+  CreateTrip: { secondStopFromDiscover?: DiscoverSecondStopPayload } | undefined;
   TripDetail: { tripId: string; openAddPlace?: boolean; focusComments?: boolean };
   /** Uygulama içi rota sunumu — önce rota özeti, sonra duraklar; initialIndex 0 tabanlı durak (ilk durak 0) */
   TripPresentation: { tripId: string; initialIndex?: number };

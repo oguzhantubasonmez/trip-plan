@@ -8,7 +8,7 @@ import { Screen } from '../components/Screen';
 import { TextField } from '../components/TextField';
 import { auth } from '../lib/firebase';
 import { getUserTripAggregateStats, type UserTripAggregateStats } from '../services/trips';
-import type { ExpenseType } from '../services/userProfile';
+import type { ExpenseType, SavedPlaceEntry } from '../services/userProfile';
 import {
   DEFAULT_EXPENSE_TYPE_IDS,
   getUserProfile,
@@ -23,6 +23,8 @@ export function ProfileScreen(props: {
   variant?: 'stack' | 'tab';
   onBack?: () => void;
   onOpenFriends: () => void;
+  /** Kaydedilen yere tıklanınca Ana sayfa yer keşfet sunumu açılır */
+  onOpenSavedPlace?: (googlePlaceId: string) => void;
 }) {
   const theme = useAppTheme();
   const { mode, setMode } = useThemeMode();
@@ -44,6 +46,7 @@ export function ProfileScreen(props: {
   const [tripStats, setTripStats] = useState<UserTripAggregateStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
+  const [savedPlaces, setSavedPlaces] = useState<SavedPlaceEntry[]>([]);
 
   const load = useCallback(async () => {
     if (!uid) return;
@@ -54,6 +57,7 @@ export function ProfileScreen(props: {
     setDefaultFuelPricePerLiter(p?.defaultFuelPricePerLiter ?? '');
     setExpenseTypes(p?.expenseTypes ?? []);
     setPhoneNational(nationalDigitsAfterTrCountry(p?.phoneNumber ?? ''));
+    setSavedPlaces(p?.savedPlaces ?? []);
   }, [uid]);
 
   const loadTripStats = useCallback(async () => {
@@ -167,14 +171,23 @@ export function ProfileScreen(props: {
   }, [expenseTypes.length]);
 
   const themeOptionLabel: Record<ThemeMode, string> = {
+    ocean: 'Okyanus',
     light: 'Açık',
     dark: 'Koyu',
-    ocean: 'Okyanus',
+    lavender: 'Lavanta',
+    ember: 'Kehribar',
+    ruby: 'Bordo',
     sunset: 'Gün batımı',
     forest: 'Orman',
   };
 
   const themeSummary = `Tema: ${themeOptionLabel[mode]}`;
+
+  const savedPlacesSummary = useMemo(() => {
+    const n = savedPlaces.length;
+    if (n === 0) return 'Henüz kayıt yok';
+    return `${n} kayıtlı yer`;
+  }, [savedPlaces.length]);
 
   return (
     <Screen>
@@ -260,6 +273,38 @@ export function ProfileScreen(props: {
           </>
         ) : (
           <Text style={styles.statsMuted}>Özet yüklenemedi.</Text>
+        )}
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Kaydedilen yerler"
+        collapsedSummary={savedPlacesSummary}
+        containerStyle={[styles.card, styles.sectionGap]}
+      >
+        <Text style={styles.blockSub}>
+          Yer keşfet ekranından «Kaydet» ile eklediğin yerler. Bir kayda dokununca aynı sunum ana sayfada açılır.
+        </Text>
+        <View style={{ height: theme.space.sm }} />
+        {savedPlaces.length === 0 ? (
+          <Text style={styles.statsMuted}>Henüz kayıtlı yer yok. Ana sayfa → Yeni bir yer keşfet.</Text>
+        ) : (
+          savedPlaces.map((sp) => (
+            <Pressable
+              key={sp.id}
+              onPress={() => props.onOpenSavedPlace?.(sp.googlePlaceId)}
+              disabled={!props.onOpenSavedPlace}
+              style={({ pressed }) => [styles.savedPlaceRow, pressed && { opacity: 0.88 }]}
+            >
+              <Text style={styles.savedPlaceName} numberOfLines={2}>
+                {sp.displayName}
+              </Text>
+              {sp.formattedAddress ? (
+                <Text style={styles.savedPlaceAddr} numberOfLines={2}>
+                  {sp.formattedAddress}
+                </Text>
+              ) : null}
+            </Pressable>
+          ))
         )}
       </CollapsibleSection>
 
@@ -382,9 +427,27 @@ export function ProfileScreen(props: {
         <View style={styles.themeGrid}>
           {(
             [
+              {
+                id: 'ocean' as const,
+                emoji: '🌊',
+                title: 'Okyanus',
+                sub: 'Varsayılan — lacivert zemin, gökyüzü mavisi',
+              },
               { id: 'light' as const, emoji: '☀️', title: 'Açık', sub: 'Gündüz, yüksek okunurluk' },
-              { id: 'dark' as const, emoji: '🌙', title: 'Koyu', sub: 'Gece ve düşük ışık' },
-              { id: 'ocean' as const, emoji: '🌊', title: 'Okyanus', sub: 'Camgöbeği tonları' },
+              { id: 'dark' as const, emoji: '🌙', title: 'Koyu', sub: 'Gece yolculuğu, nötr koyu' },
+              {
+                id: 'lavender' as const,
+                emoji: '💜',
+                title: 'Lavanta',
+                sub: 'Gece moru ve ipek tonları',
+              },
+              {
+                id: 'ember' as const,
+                emoji: '🔥',
+                title: 'Kehribar',
+                sub: 'Sıcak karanlık, altın vurgular',
+              },
+              { id: 'ruby' as const, emoji: '🍷', title: 'Bordo', sub: 'Kırmızı & gül tonları' },
               { id: 'sunset' as const, emoji: '🌅', title: 'Gün batımı', sub: 'Sıcak mor & mercan' },
               { id: 'forest' as const, emoji: '🌲', title: 'Orman', sub: 'Zümrüt yeşili' },
             ] as const
@@ -503,6 +566,17 @@ function createProfileStyles(theme: AppTheme) {
       marginTop: theme.space.sm,
     },
     blockSub: { color: theme.color.muted, fontSize: theme.font.small, lineHeight: 20 },
+    savedPlaceRow: {
+      paddingVertical: theme.space.sm,
+      paddingHorizontal: theme.space.sm,
+      marginBottom: theme.space.sm,
+      borderRadius: theme.radius.md,
+      backgroundColor: theme.color.inputBg,
+      borderWidth: 1,
+      borderColor: theme.color.subtle,
+    },
+    savedPlaceName: { color: theme.color.text, fontSize: theme.font.body, fontWeight: '800' },
+    savedPlaceAddr: { color: theme.color.muted, fontSize: theme.font.tiny, marginTop: 4, lineHeight: 18 },
     statsMuted: { color: theme.color.muted, fontSize: theme.font.small, fontStyle: 'italic' },
     statsError: { color: theme.color.danger, fontSize: theme.font.small, fontWeight: '700' },
     statsGrid: {

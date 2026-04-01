@@ -130,7 +130,7 @@ function sumLegKm(stops: PlanSummaryStopRow[]): number {
  * Rota yakıtını günlere böler: o günkü bacak km / tüm bacak km.
  * Bacak km yoksa yakıt gün sayısına eşit bölünür (yuvarlama son güne dengelenir).
  */
-function allocateFuelTlByDay(
+export function allocateFuelTlByDay(
   dayGroups: { stops: PlanSummaryStopRow[] }[],
   fuelTl: number
 ): number[] {
@@ -305,223 +305,6 @@ export function buildPlanSummaryCsv(input: PlanSummaryExportInput): string {
   return '\uFEFF' + lines.join('\r\n');
 }
 
-export function buildPlanSummaryHtml(input: PlanSummaryExportInput): string {
-  const title = escapeHtml(input.tripTitle);
-  const fuelShareByDay = allocateFuelTlByDay(input.dayGroups, input.fuelTl);
-
-  const rowsHtml = (rows: PlanSummaryStopRow[]) =>
-    rows
-      .map(
-        (s) => `
-    <tr>
-      <td>${s.routeIndex}</td>
-      <td>${escapeHtml(s.name)}</td>
-      <td class="muted">${escapeHtml(s.arrival ?? '—')}</td>
-      <td class="muted">${escapeHtml(s.departure ?? '—')}</td>
-      <td class="num muted">${escapeHtml(s.stopRestDisplay)}</td>
-      <td>${escapeHtml(s.extrasSummary)}</td>
-      <td class="num">${s.stopTotalTl.toFixed(2)} ₺</td>
-      <td class="num muted">${s.legKm != null ? `${s.legKm} km` : '—'}</td>
-      <td class="num muted">${s.legMin != null ? `${s.legMin} dk` : '—'}</td>
-    </tr>`
-      )
-      .join('');
-
-  const dayTotalsHtml = (stops: PlanSummaryStopRow[], fuelShareTl: number) => {
-    const t = computeDayTotals(stops);
-    const restLabel = t.totalRestMin > 0 ? formatDurationTr(t.totalRestMin) : '—';
-    const driveLabel = t.totalLegDriveMin > 0 ? formatDurationTr(t.totalLegDriveMin) : '—';
-    const kmLabel =
-      t.totalLegKm > 0
-        ? `${t.totalLegKm.toLocaleString('tr-TR', { maximumFractionDigits: 1 })} km`
-        : '—';
-    const fuelPart = Math.round(fuelShareTl * 100) / 100;
-    const grandDay = Math.round((t.totalExpenseTl + fuelPart) * 100) / 100;
-    const subLine =
-      fuelPart > 0
-        ? `<span class="dt-sub">Duraklar ${t.totalExpenseTl.toFixed(2)} ₺ · Yakıt payı ${fuelPart.toFixed(2)} ₺</span>`
-        : '';
-    return `
-    <div class="day-totals">
-      <div class="day-totals-inner">
-        <div class="dt-item"><span class="dt-lbl">Toplam dinlenme (durakta)</span><span class="dt-val">${escapeHtml(restLabel)}</span></div>
-        <div class="dt-item"><span class="dt-lbl">Toplam sürüş</span><span class="dt-val">${escapeHtml(driveLabel)}</span></div>
-        <div class="dt-item"><span class="dt-lbl">Toplam mesafe</span><span class="dt-val">${escapeHtml(kmLabel)}</span></div>
-        <div class="dt-item dt-item-wide">
-          <span class="dt-lbl">Toplam masraf</span>
-          <span class="dt-val">${grandDay.toFixed(2)} ₺</span>
-          ${subLine}
-        </div>
-      </div>
-    </div>`;
-  };
-
-  const daySections = input.dayGroups
-    .map(
-      (g, dayIdx) => `
-  <section class="day">
-    <h3>${escapeHtml(g.dayLabel)}</h3>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Durak</th>
-            <th>Varış</th>
-            <th>Ayrılış</th>
-            <th>Durakta süre</th>
-            <th>Masraflar</th>
-            <th>Toplam</th>
-            <th>Önceki duraktan<br/><span class="th-sub">km</span></th>
-            <th>Önceki duraktan<br/><span class="th-sub">dk</span></th>
-          </tr>
-        </thead>
-        <tbody>${rowsHtml(g.stops)}</tbody>
-      </table>
-    </div>
-    ${dayTotalsHtml(g.stops, fuelShareByDay[dayIdx] ?? 0)}
-  </section>`
-    )
-    .join('');
-
-  const catRows =
-    input.extraByCategory.length > 0
-      ? input.extraByCategory
-          .map(
-            (c) =>
-              `<tr><td>${escapeHtml(c.name)}</td><td class="num">${c.total.toFixed(2)} ₺</td></tr>`
-          )
-          .join('')
-      : '<tr><td colspan="2" class="muted">Ekstra masraf yok</td></tr>';
-
-  return `<!DOCTYPE html>
-<html lang="tr">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>RouteWise · ${title}</title>
-  <style>
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-      background: linear-gradient(165deg, #0f172a 0%, #1e293b 40%, #0b1220 100%);
-      color: #e2e8f0;
-      min-height: 100vh;
-      padding: 24px 16px 48px;
-    }
-    .wrap { max-width: 920px; margin: 0 auto; }
-    .hero {
-      background: linear-gradient(135deg, rgba(14, 165, 233, 0.25), rgba(59, 130, 246, 0.12));
-      border: 1px solid rgba(148, 163, 184, 0.2);
-      border-radius: 20px;
-      padding: 22px 24px;
-      margin-bottom: 20px;
-      box-shadow: 0 20px 50px rgba(0,0,0,0.35);
-    }
-    .brand { font-size: 12px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; color: #38bdf8; margin-bottom: 6px; }
-    h1 { margin: 0; font-size: 1.55rem; font-weight: 900; letter-spacing: -0.02em; color: #f8fafc; }
-    .meta { margin-top: 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px 16px; font-size: 0.9rem; color: #cbd5e1; }
-    .meta strong { display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; margin-bottom: 2px; }
-    .totals {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-      gap: 12px;
-      margin-bottom: 22px;
-    }
-    .card {
-      background: rgba(30, 41, 59, 0.85);
-      border: 1px solid rgba(148, 163, 184, 0.18);
-      border-radius: 14px;
-      padding: 14px 16px;
-    }
-    .card .lbl { font-size: 0.75rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
-    .card .val { font-size: 1.25rem; font-weight: 800; margin-top: 6px; color: #f1f5f9; }
-    .card.total { border-color: rgba(56, 189, 248, 0.45); background: rgba(14, 165, 233, 0.12); }
-    .card.total .val { color: #7dd3fc; }
-    section.day { margin-bottom: 28px; }
-    section.day h3 {
-      font-size: 1.05rem;
-      font-weight: 800;
-      color: #bae6fd;
-      margin: 0 0 8px 2px;
-      border-bottom: 1px solid rgba(148, 163, 184, 0.25);
-      padding-bottom: 8px;
-    }
-    .day-totals {
-      margin: 0 0 12px 0;
-      padding: 12px 14px;
-      background: rgba(14, 165, 233, 0.08);
-      border: 1px solid rgba(56, 189, 248, 0.22);
-      border-radius: 12px;
-    }
-    .day-totals-inner {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-      gap: 10px 16px;
-      font-size: 0.82rem;
-    }
-    .dt-item { display: flex; flex-direction: column; gap: 4px; }
-    .dt-item-wide { grid-column: 1 / -1; }
-    .dt-lbl { color: #94a3b8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.68rem; }
-    .dt-val { color: #e0f2fe; font-weight: 800; font-size: 0.95rem; }
-    .dt-sub { display: block; margin-top: 4px; font-size: 0.72rem; font-weight: 600; color: #94a3b8; line-height: 1.35; }
-    th .th-sub { font-weight: 700; opacity: 0.85; text-transform: lowercase; letter-spacing: 0; }
-    .table-wrap { overflow-x: auto; border-radius: 14px; border: 1px solid rgba(148, 163, 184, 0.15); }
-    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; background: rgba(15, 23, 42, 0.65); }
-    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid rgba(148, 163, 184, 0.12); vertical-align: top; }
-    th {
-      background: rgba(30, 41, 59, 0.95);
-      font-weight: 800;
-      font-size: 0.72rem;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      color: #94a3b8;
-    }
-    tr:last-child td { border-bottom: none; }
-    .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-    .muted { color: #94a3b8; }
-    .foot { margin-top: 28px; font-size: 0.8rem; color: #64748b; text-align: center; }
-    .cat { margin-top: 24px; }
-    .cat h2 { font-size: 1rem; margin: 0 0 10px; color: #e2e8f0; }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <header class="hero">
-      <div class="brand">RouteWise</div>
-      <h1>${title}</h1>
-      <div class="meta">
-        <div><strong>Plan</strong>${escapeHtml(input.scheduleLine)}</div>
-        ${input.vehicleLabel ? `<div><strong>Araç</strong>${escapeHtml(input.vehicleLabel)}</div>` : ''}
-        <div><strong>Mesafe</strong>${escapeHtml(input.kmLine)}</div>
-        <div><strong>Sürüş süresi</strong>${escapeHtml(input.durationLine)}</div>
-        <div><strong>Durak</strong>${input.stopCount}</div>
-      </div>
-    </header>
-    <div class="totals">
-      <div class="card"><div class="lbl">Ekstra</div><div class="val">${input.extraTl.toFixed(2)} ₺</div></div>
-      <div class="card"><div class="lbl">Yakıt</div><div class="val">${input.fuelTl.toFixed(2)} ₺</div></div>
-      <div class="card total"><div class="lbl">Toplam</div><div class="val">${input.grandTl.toFixed(2)} ₺</div></div>
-    </div>
-    ${
-      input.perPersonTl != null && input.goingCount > 0
-        ? `<p style="margin:0 0 20px;color:#cbd5e1;font-size:0.95rem;">Kişi başı (${input.goingCount} katılıyor): <strong style="color:#7dd3fc">${input.perPersonTl.toFixed(2)} ₺</strong></p>`
-        : ''
-    }
-    ${daySections}
-    <section class="cat">
-      <h2>Masraf türleri</h2>
-      <div class="table-wrap">
-        <table><thead><tr><th>Tür</th><th class="num">Toplam</th></tr></thead><tbody>${catRows}</tbody></table>
-      </div>
-    </section>
-    <p class="foot">Dışa aktarım: ${escapeHtml(input.exportedAt)} · RouteWise</p>
-  </div>
-</body>
-</html>`;
-}
-
 function webDownload(filename: string, content: string, mime: string): void {
   if (typeof document === 'undefined') return;
   const blob = new Blob([content], { type: mime });
@@ -534,6 +317,20 @@ function webDownload(filename: string, content: string, mime: string): void {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+/** Tarayıcıda dosya indirme — uzun async sonrası programatik tıklama engellendiği için genelde kullanıcı tıklamasında çağırın. */
+export function triggerBrowserFileDownload(filename: string, content: string, mimeType: string): void {
+  webDownload(filename, content, mimeType);
+}
+
+export function buildPlanExportFilename(
+  tripId: string,
+  tripTitle: string,
+  extension: 'csv' | 'html'
+): string {
+  const baseName = `RouteWise-${safeFilenamePart(tripTitle)}-${tripId.slice(0, 8)}`;
+  return `${baseName}.${extension}`;
 }
 
 function webDownloadBase64(filename: string, base64: string, mime: string): void {
@@ -645,8 +442,7 @@ export async function sharePlanExportFile(params: {
   mimeType: string;
   dialogTitle: string;
 }): Promise<void> {
-  const baseName = `RouteWise-${safeFilenamePart(params.tripTitle)}-${params.tripId.slice(0, 8)}`;
-  const filename = `${baseName}.${params.extension}`;
+  const filename = buildPlanExportFilename(params.tripId, params.tripTitle, params.extension);
 
   if (Platform.OS === 'web') {
     webDownload(filename, params.content, params.mimeType);
@@ -656,7 +452,7 @@ export async function sharePlanExportFile(params: {
   const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
   const file = new File(Paths.cache, safeName);
   file.create({ overwrite: true });
-  file.write(params.content, { encoding: 'utf8' });
+  file.write(params.content, { encoding: 'utf8' as const });
 
   const available = await Sharing.isAvailableAsync();
   if (!available) {

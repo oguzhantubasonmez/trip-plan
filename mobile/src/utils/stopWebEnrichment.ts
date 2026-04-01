@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { fetchPlacePresentationRich, findPlaceIdFromTextQuery } from '../services/places';
 import type { Stop } from '../types/trip';
@@ -54,6 +55,70 @@ async function fetchWithTimeout(url: string, timeoutMs: number, init?: RequestIn
 async function fetchJson<T>(url: string, timeoutMs = 8000, init?: RequestInit): Promise<T | null> {
   const res = await fetchWithTimeout(url, timeoutMs, init);
   if (!res || !res.ok) return null;
+  try {
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** Wikipedia: tek sıra, istekler arası boşluk, 429/503 için kısa ban + yeniden deneme. */
+const WIKI_MIN_MS = Platform.OS === 'web' ? 450 : 320;
+let wikiQueue: Promise<unknown> = Promise.resolve();
+let wikiNextSlot = 0;
+let wikiBanUntil = 0;
+let wiki429Streak = 0;
+
+function enqueueWiki<T>(fn: () => Promise<T>): Promise<T> {
+  const next = wikiQueue.then(() => fn());
+  wikiQueue = next.then(
+    () => {},
+    () => {}
+  );
+  return next;
+}
+
+async function wikiPace(): Promise<void> {
+  const now = Date.now();
+  if (now < wikiBanUntil) await sleep(wikiBanUntil - now);
+  const t = Date.now();
+  if (t < wikiNextSlot) await sleep(wikiNextSlot - t);
+  wikiNextSlot = Date.now() + WIKI_MIN_MS;
+}
+
+async function wikiFetchResponse(
+  url: string,
+  timeoutMs: number,
+  init?: RequestInit
+): Promise<Response | null> {
+  return enqueueWiki(async () => {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await wikiPace();
+      if (Date.now() < wikiBanUntil) return null;
+      const res = await fetchWithTimeout(url, timeoutMs, init);
+      if (!res) {
+        await sleep(500 * (attempt + 1));
+        continue;
+      }
+      if (res.status === 429 || res.status === 503) {
+        wiki429Streak++;
+        wikiBanUntil = Math.max(
+          wikiBanUntil,
+          Date.now() + Math.min(120_000, 12_000 * wiki429Streak)
+        );
+        await sleep(Math.min(10_000, 1800 * (attempt + 1)));
+        continue;
+      }
+      if (res.ok) wiki429Streak = Math.max(0, wiki429Streak - 1);
+      return res;
+    }
+    return null;
+  });
+}
+
+async function wikiFetchJson<T>(url: string, timeoutMs = 8000, init?: RequestInit): Promise<T | null> {
+  const res = await wikiFetchResponse(url, timeoutMs, init);
+  if (!res?.ok) return null;
   try {
     return (await res.json()) as T;
   } catch {
@@ -131,7 +196,7 @@ async function wikiGeosearchTitles(
     `https://${lang}.wikipedia.org/w/api.php?action=query&list=geosearch` +
     `&gscoord=${encodeURIComponent(String(lat))}|${encodeURIComponent(String(lon))}` +
     `&gsradius=2500&gslimit=${limit}&format=json&origin=*`;
-  const data = await fetchJson<{ query?: { geosearch?: { title: string }[] } }>(u, 8000, wikiFetchInit());
+  const data = await wikiFetchJson<{ query?: { geosearch?: { title: string }[] } }>(u, 8000, wikiFetchInit());
   const rows = data?.query?.geosearch || [];
   const out: string[] = [];
   for (const g of rows) {
@@ -147,7 +212,7 @@ async function wikiSearchTitles(lang: 'tr' | 'en', q: string, limit: number): Pr
   const u =
     `https://${lang}.wikipedia.org/w/api.php?action=query&list=search&format=json&origin=*` +
     `&srlimit=${limit}&srsearch=${encodeURIComponent(qq)}`;
-  const data = await fetchJson<{ query?: { search?: { title: string }[] } }>(u, 8000, wikiFetchInit());
+  const data = await wikiFetchJson<{ query?: { search?: { title: string }[] } }>(u, 8000, wikiFetchInit());
   const rows = data?.query?.search || [];
   const out: string[] = [];
   for (const s of rows) {
@@ -190,7 +255,7 @@ async function wikiPageLeadRich(lang: 'tr' | 'en', title: string): Promise<WikiS
     `https://${lang}.wikipedia.org/w/api.php?action=query&prop=extracts|pageimages&redirects=1` +
     `&exintro=1&explaintext=1&piprop=thumbnail&pithumbsize=800` +
     `&format=json&origin=*&titles=${encodeURIComponent(title)}`;
-  const data = await fetchJson<{ query?: { pages?: Record<string, WikiQueryPage> } }>(u, 8000, wikiFetchInit());
+  const data = await wikiFetchJson<{ query?: { pages?: Record<string, WikiQueryPage> } }>(u, 8000, wikiFetchInit());
   const pages = data?.query?.pages;
   if (!pages) return null;
   const page = Object.values(pages)[0];
@@ -206,11 +271,30 @@ async function wikiPageLeadRich(lang: 'tr' | 'en', title: string): Promise<WikiS
   return { extract, title: resolvedTitle, url, thumbnailUrl, originalImageUrl: undefined };
 }
 
+const wikiRestSummaryMem = new Map<string, { at: number; val: WikiSummaryRich | null }>();
+const WIKI_REST_HIT_TTL_MS = 48 * 60 * 60 * 1000;
+const WIKI_REST_MISS_TTL_MS = 25 * 60 * 1000;
+
+function wikiRestCacheKey(lang: string, title: string): string {
+  return `${lang}|${title.replace(/\s+/g, ' ').trim().toLocaleLowerCase('tr-TR')}`;
+}
+
 async function wikiPageSummary(lang: 'tr' | 'en', title: string): Promise<WikiSummaryRich | null> {
+  const ck = wikiRestCacheKey(lang, title);
+  const hit = wikiRestSummaryMem.get(ck);
+  if (hit) {
+    const ttl = hit.val ? WIKI_REST_HIT_TTL_MS : WIKI_REST_MISS_TTL_MS;
+    if (Date.now() - hit.at < ttl) return hit.val;
+  }
+
   const enc = encodeURIComponent(title.replace(/ /g, '_'));
   const u = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${enc}`;
-  const res = await fetchWithTimeout(u, 8000, wikiFetchInit());
-  if (!res || !res.ok) return null;
+  const res = await wikiFetchResponse(u, 8000, wikiFetchInit());
+  if (!res) return null;
+  if (!res.ok) {
+    if (res.status === 404) wikiRestSummaryMem.set(ck, { at: Date.now(), val: null });
+    return null;
+  }
   try {
     const j = (await res.json()) as {
       type?: string;
@@ -220,9 +304,15 @@ async function wikiPageSummary(lang: 'tr' | 'en', title: string): Promise<WikiSu
       thumbnail?: { source?: string };
       originalimage?: { source?: string };
     };
-    if (j.type === 'disambiguation') return null;
+    if (j.type === 'disambiguation') {
+      wikiRestSummaryMem.set(ck, { at: Date.now(), val: null });
+      return null;
+    }
     const extract = typeof j.extract === 'string' ? j.extract.trim() : '';
-    if (!extract) return null;
+    if (!extract) {
+      wikiRestSummaryMem.set(ck, { at: Date.now(), val: null });
+      return null;
+    }
     const url =
       j.content_urls?.desktop?.page ||
       j.content_urls?.mobile?.page ||
@@ -233,31 +323,74 @@ async function wikiPageSummary(lang: 'tr' | 'en', title: string): Promise<WikiSu
     const originalImageUrl = normalizeWikiMediaUrl(
       typeof j.originalimage?.source === 'string' ? j.originalimage.source : undefined
     );
-    return { extract, title: j.title || title, url, thumbnailUrl, originalImageUrl };
+    const val: WikiSummaryRich = {
+      extract,
+      title: j.title || title,
+      url,
+      thumbnailUrl,
+      originalImageUrl,
+    };
+    wikiRestSummaryMem.set(ck, { at: Date.now(), val });
+    return val;
   } catch {
     return null;
   }
 }
 
+/** Önce REST summary (hafif); gerekirde lead + görsel tamamlama. */
 async function wikiPageRichForPresentation(lang: 'tr' | 'en', title: string): Promise<WikiSummaryRich | null> {
+  const rest = await wikiPageSummary(lang, title);
+  if (rest?.extract?.trim()) {
+    const hasImg = Boolean(rest.thumbnailUrl || rest.originalImageUrl);
+    const longEnough = rest.extract.length >= 380;
+    if (hasImg || longEnough) return rest;
+    const lead = await wikiPageLeadRich(lang, title);
+    if (lead?.extract?.trim()) {
+      return {
+        extract: lead.extract.length > rest.extract.length ? lead.extract : rest.extract,
+        title: lead.title || rest.title,
+        url: lead.url || rest.url,
+        thumbnailUrl: lead.thumbnailUrl || rest.thumbnailUrl,
+        originalImageUrl: rest.originalImageUrl || lead.originalImageUrl,
+      };
+    }
+    return rest;
+  }
   const lead = await wikiPageLeadRich(lang, title);
-  if (!lead?.extract) return wikiPageSummary(lang, title);
+  if (!lead?.extract?.trim()) return null;
   if (!lead.thumbnailUrl && !lead.originalImageUrl) {
-    const rest = await wikiPageSummary(lang, lead.title);
-    if (rest && (rest.thumbnailUrl || rest.originalImageUrl)) {
+    const sum = await wikiPageSummary(lang, lead.title);
+    if (sum && (sum.thumbnailUrl || sum.originalImageUrl)) {
       return {
         ...lead,
-        thumbnailUrl: lead.thumbnailUrl || rest.thumbnailUrl,
-        originalImageUrl: rest.originalImageUrl,
+        thumbnailUrl: sum.thumbnailUrl,
+        originalImageUrl: sum.originalImageUrl,
       };
     }
   }
   return lead;
 }
 
-/** OSM statik önizleme (koordinat var, Wikipedia görseli yoksa). */
+/**
+ * Koordinat önizlemesi (Wikipedia / Google görseli yoksa).
+ * Google Static Maps: Cloud Console’da “Maps Static API” açık olmalı; aynı istemci anahtarı kullanılabilir.
+ * Anahtar yoksa Wikimedia OSM; openstreetmap.de bazı ağlarda DNS hatası verebiliyor.
+ */
 export function staticMapPreviewUrl(lat: number, lon: number, width = 640, height = 360): string {
-  return `https://staticmap.openstreetmap.de/staticmap.php?center=${lat},${lon}&zoom=14&size=${width}x${height}&maptype=mapnik`;
+  const w = Math.min(Math.max(80, Math.round(width)), 640);
+  const h = Math.min(Math.max(80, Math.round(height)), 640);
+  const key = getGoogleMapsApiKey();
+  if (key) {
+    return `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lon}&zoom=14&size=${w}x${h}&scale=2&maptype=roadmap&key=${encodeURIComponent(key)}`;
+  }
+  return `https://maps.wikimedia.org/img/osm-intl,14,${lat},${lon},${w}x${h}.png`;
+}
+
+/** Birincil harita URL’si yüklenemezse (ör. geçici DNS) yedek. */
+export function staticMapPreviewUrlFallback(lat: number, lon: number, width = 640, height = 360): string {
+  const w = Math.min(Math.max(80, Math.round(width)), 800);
+  const h = Math.min(Math.max(80, Math.round(height)), 800);
+  return `https://staticmap.openstreetmap.fr/staticmap.php?center=${lat},${lon}&zoom=14&size=${w}x${h}&maptype=mapnik`;
 }
 
 /** Sunum: Wikipedia/OSM özet dilimi (durak başlığına göre). */
@@ -527,6 +660,65 @@ type SummarySlice = {
   wikipediaPageTitle?: string;
 };
 
+const WIKI_SLICE_STORAGE_PREFIX = 'rw_wiki_slice:v1:';
+const WIKI_SLICE_MEM_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function hashStorageKey(s: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+
+function wikiSliceLogicalKey(stop: Stop, name: string): string {
+  const gid = stop.googlePlaceId?.trim() ?? '';
+  const lat = stop.coords?.latitude;
+  const lon = stop.coords?.longitude;
+  const geo =
+    lat != null && lon != null && Number.isFinite(lat) && Number.isFinite(lon)
+      ? `${lat.toFixed(3)}_${lon.toFixed(3)}`
+      : 'n';
+  return `${gid}|${geo}|${normalizeMatchBlob(name).slice(0, 160)}`;
+}
+
+const wikiSliceMemCache = new Map<string, { at: number; slice: SummarySlice }>();
+const wikiSliceInflight = new Map<string, Promise<SummarySlice>>();
+
+async function loadWikiSliceFromDisk(storageKey: string): Promise<SummarySlice | null> {
+  try {
+    const raw = await AsyncStorage.getItem(WIKI_SLICE_STORAGE_PREFIX + storageKey);
+    if (!raw) return null;
+    const j = JSON.parse(raw) as { at: number; slice: SummarySlice };
+    if (!j?.slice || Date.now() - j.at > WIKI_SLICE_MEM_TTL_MS) return null;
+    return j.slice;
+  } catch {
+    return null;
+  }
+}
+
+async function saveWikiSliceToDisk(storageKey: string, slice: SummarySlice): Promise<void> {
+  try {
+    await AsyncStorage.setItem(
+      WIKI_SLICE_STORAGE_PREFIX + storageKey,
+      JSON.stringify({ at: Date.now(), slice })
+    );
+  } catch {
+    /* */
+  }
+}
+
+/** `fetchPresentationWebForStop` içinde Nominatim / genel fallback ile tamamlanan özeti de sakla (puanlı duraklar). */
+function persistPresentationSummarySliceCache(stop: Stop, row: PlanSummaryStopRow, slice: SummarySlice): void {
+  const name = (stop.locationName || row.name || '').trim();
+  if (!name) return;
+  if (slice.bullets.length === 0 && !slice.sourceLine) return;
+  const storageKey = hashStorageKey(wikiSliceLogicalKey(stop, name));
+  wikiSliceMemCache.set(storageKey, { at: Date.now(), slice });
+  void saveWikiSliceToDisk(storageKey, slice);
+}
+
 /**
  * Durak başlığına göre Wikipedia (+ isteğe bağlı konum/OSM yedekleri).
  * Google puanı olan duraklarda yalnızca metin araması (geosearch/OSM kapalı): özet, başlıkla uyumlu kalsın.
@@ -543,7 +735,7 @@ function dedupeQueryList(queries: string[]): string[] {
   return out;
 }
 
-async function fetchPresentationSummarySlice(
+async function doFetchPresentationSummarySlice(
   stop: Stop,
   row: PlanSummaryStopRow,
   mapFallback: string | undefined,
@@ -655,6 +847,7 @@ async function fetchPresentationSummarySlice(
       const block = await tryWikiArticle('tr', t, '');
       if (block) return block;
     }
+    await sleep(320);
   }
 
   for (const t of uniquePlaceSearchNames(name)) {
@@ -670,6 +863,7 @@ async function fetchPresentationSummarySlice(
       const block = await tryWikiArticle('en', t, '');
       if (block) return block;
     }
+    await sleep(320);
   }
 
   if (opts.allowGeosearch) {
@@ -697,13 +891,77 @@ async function fetchPresentationSummarySlice(
     }
   }
 
+  /** Puanlı duraklar: Nominatim yedeği `fetchPresentationWebForStop` içinde (OSM özeti güvenli). */
+  if (!opts.allowOsm) {
+    return {
+      bullets: [],
+      sourceLine: '',
+      url: undefined,
+      heroImageUrl: undefined,
+      wikipediaPageTitle: undefined,
+    };
+  }
+
+  const fallbackLabel = primary.length >= 2 ? primary : name;
   return {
-    bullets: [],
-    sourceLine: '',
+    bullets: [
+      truncatePresentationText(`${fallbackLabel} keşfedilmeye değer bir lokasyondur.`, 600),
+    ],
+    sourceLine: 'Genel bilgi',
     url: undefined,
-    heroImageUrl: undefined,
+    heroImageUrl: mapFallback,
     wikipediaPageTitle: undefined,
   };
+}
+
+async function fetchPresentationSummarySlice(
+  stop: Stop,
+  row: PlanSummaryStopRow,
+  mapFallback: string | undefined,
+  opts: { allowGeosearch: boolean; allowOsm: boolean }
+): Promise<SummarySlice> {
+  const name = (stop.locationName || row.name || '').trim();
+  if (!name) {
+    return {
+      bullets: [],
+      sourceLine: '',
+      url: undefined,
+      heroImageUrl: undefined,
+      wikipediaPageTitle: undefined,
+    };
+  }
+
+  const storageKey = hashStorageKey(wikiSliceLogicalKey(stop, name));
+
+  const inflight = wikiSliceInflight.get(storageKey);
+  if (inflight) return inflight;
+
+  const mem = wikiSliceMemCache.get(storageKey);
+  if (mem && Date.now() - mem.at < WIKI_SLICE_MEM_TTL_MS) {
+    if (mem.slice.bullets.length > 0 || mem.slice.sourceLine) return mem.slice;
+  }
+
+  const fromDisk = await loadWikiSliceFromDisk(storageKey);
+  if (fromDisk && (fromDisk.bullets.length > 0 || fromDisk.sourceLine)) {
+    wikiSliceMemCache.set(storageKey, { at: Date.now(), slice: fromDisk });
+    return fromDisk;
+  }
+
+  const p = (async (): Promise<SummarySlice> => {
+    try {
+      const out = await doFetchPresentationSummarySlice(stop, row, mapFallback, opts);
+      if (out.bullets.length > 0 || out.sourceLine) {
+        wikiSliceMemCache.set(storageKey, { at: Date.now(), slice: out });
+        void saveWikiSliceToDisk(storageKey, out);
+      }
+      return out;
+    } finally {
+      wikiSliceInflight.delete(storageKey);
+    }
+  })();
+
+  wikiSliceInflight.set(storageKey, p);
+  return p;
 }
 
 /**
@@ -736,10 +994,41 @@ export async function fetchPresentationWebForStop(
     };
   }
 
-  const summary = await fetchPresentationSummarySlice(stop, row, mapFallback, {
+  let summary = await fetchPresentationSummarySlice(stop, row, mapFallback, {
     allowGeosearch: !rated,
     allowOsm: !rated,
   });
+
+  /**
+   * Puanlı duraklarda Wikipedia geosearch/OSM içeride kapalı (yanlış “en yakın madde” riski).
+   * Yine de Wikipedia 429/boş kalırsa adres satırı + harita linki için Nominatim yedeği güvenli (koordinat + isim).
+   */
+  if (summary.bullets.length === 0 && name) {
+    const osm = await nominatimEnrich(name, lat, lon);
+    if (osm && osm.bullets.length > 0) {
+      summary = {
+        bullets: osm.bullets,
+        sourceLine: osm.sourceLine,
+        url: osm.url,
+        heroImageUrl: mapFallback,
+        wikipediaPageTitle: undefined,
+      };
+    }
+  }
+
+  if (summary.bullets.length === 0 && name) {
+    const label = primaryLocationLabelForWiki(name);
+    const fallbackLabel = label.length >= 2 ? label : name;
+    summary = {
+      bullets: [
+        truncatePresentationText(`${fallbackLabel} keşfedilmeye değer bir lokasyondur.`, 600),
+      ],
+      sourceLine: 'Genel bilgi',
+      url: undefined,
+      heroImageUrl: mapFallback,
+      wikipediaPageTitle: undefined,
+    };
+  }
 
   let reviewBullets: string[] = [];
   let reviewSourceLine = '';
@@ -761,6 +1050,11 @@ export async function fetchPresentationWebForStop(
   const heroImageUrl = rated
     ? googleHero || summary.heroImageUrl || mapFallback
     : summary.heroImageUrl || googleHero || mapFallback;
+
+  persistPresentationSummarySliceCache(stop, row, {
+    ...summary,
+    heroImageUrl: summary.heroImageUrl ?? heroImageUrl,
+  });
 
   return {
     summaryBullets: summary.bullets,

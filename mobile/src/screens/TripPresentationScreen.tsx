@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -28,6 +28,7 @@ import {
 import { buildPlanStopRows } from '../utils/planSummaryExport';
 import { buildStopPresentationPayloads, type StopPresentationPayload } from '../utils/presentationModel';
 import { enrichPresentationPayloads } from '../utils/stopPresentationEnrichment';
+import { staticMapPreviewUrlFallback } from '../utils/stopWebEnrichment';
 import { GOOGLE_PLACE_RATING_STAR_COLOR } from '../services/places';
 import type { Stop, Trip } from '../types/trip';
 
@@ -74,9 +75,27 @@ function buildTripTotals(trip: Trip, pages: StopPresentationPayload[]): TripTota
   };
 }
 
-function ResilientHeroImage({ uri, style }: { uri: string | undefined; style: ImageStyle }) {
-  const [failed, setFailed] = useState(false);
-  if (!uri || failed) {
+function ResilientHeroImage({
+  uri,
+  fallbackUri,
+  style,
+}: {
+  uri: string | undefined;
+  /** Birincil URL (ör. Google Static / Wikimedia) düşerse sıradaki harita önizlemesi. */
+  fallbackUri?: string;
+  style: ImageStyle;
+}) {
+  const candidates = useMemo(
+    () => [uri, fallbackUri].filter((x): x is string => Boolean(x && String(x).trim())),
+    [uri, fallbackUri]
+  );
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    setIndex(0);
+  }, [uri, fallbackUri]);
+
+  if (index >= candidates.length) {
     return (
       <LinearGradient
         colors={['#1e3a5f', '#0f172a']}
@@ -88,10 +107,10 @@ function ResilientHeroImage({ uri, style }: { uri: string | undefined; style: Im
   }
   return (
     <Image
-      source={{ uri }}
+      source={{ uri: candidates[index] }}
       style={style}
       resizeMode="cover"
-      onError={() => setFailed(true)}
+      onError={() => setIndex((k) => k + 1)}
     />
   );
 }
@@ -236,20 +255,35 @@ function IntroSlide({
 export function PresentationStopSlide({
   item,
   width,
+  appInfoReplacement,
 }: {
   item: StopPresentationPayload;
   width: number;
+  /** Yer keşfet: rota dışıyken metrikler + Google puan satırı yerine (ör. aksiyon butonları). */
+  appInfoReplacement?: ReactElement | null;
 }) {
   const visitLine =
     item.arrival || item.departure
       ? `Ziyaret: ${item.arrival ?? '—'} – ${item.departure ?? '—'}`
       : null;
 
+  const mapHeroFallback =
+    item.coords?.latitude != null &&
+    item.coords?.longitude != null &&
+    Number.isFinite(item.coords.latitude) &&
+    Number.isFinite(item.coords.longitude)
+      ? staticMapPreviewUrlFallback(item.coords.latitude, item.coords.longitude)
+      : undefined;
+
   return (
     <View style={[slideStyles.page, { width }]}>
       <View style={slideStyles.slideCard}>
       <View style={slideStyles.heroWrap}>
-        <ResilientHeroImage uri={item.heroImageUrl} style={slideStyles.heroImg} />
+        <ResilientHeroImage
+          uri={item.heroImageUrl}
+          fallbackUri={mapHeroFallback}
+          style={slideStyles.heroImg}
+        />
         {item.webLoading ? (
           <View style={slideStyles.heroLoading}>
             <ActivityIndicator color={ACCENT} />
@@ -277,44 +311,50 @@ export function PresentationStopSlide({
         </View>
       ) : null}
 
-      <Text style={slideStyles.sectionLabel}>Uygulama bilgileri</Text>
-      <View style={slideStyles.metricsRow}>
-        <View style={slideStyles.metricTile}>
-          <Ionicons name="time-outline" size={22} color={ACCENT} />
-          <Text style={slideStyles.metricValue}>{item.stopRestDisplay}</Text>
-          <Text style={slideStyles.metricLabel}>Durakta</Text>
-        </View>
-        <View style={slideStyles.metricTile}>
-          <Ionicons name="navigate-outline" size={22} color={ACCENT} />
-          <Text style={slideStyles.metricValue}>
-            {item.legKm != null ? `${item.legKm} km` : '—'}
-          </Text>
-          <Text style={slideStyles.metricLabel}>{item.legModeLabel}</Text>
-        </View>
-        <View style={slideStyles.metricTile}>
-          <Ionicons name="car-outline" size={22} color={ACCENT} />
-          <Text style={slideStyles.metricValue}>
-            {item.legMin != null ? `${item.legMin} dk` : '—'}
-          </Text>
-          <Text style={slideStyles.metricLabel}>Önceki durak</Text>
-        </View>
-      </View>
-      {item.placeRating != null && item.placeRating > 0 ? (
-        <View style={slideStyles.ratingRow}>
-          <Ionicons
-            name="star"
-            size={16}
-            color={GOOGLE_PLACE_RATING_STAR_COLOR}
-            style={slideStyles.ratingStarIcon}
-          />
-          <Text style={slideStyles.ratingLine}>
-            Google puanı (durak eklenirken kayıtlı): {item.placeRating.toFixed(1)}
-            {item.placeUserRatingsTotal != null && item.placeUserRatingsTotal > 0
-              ? ` · ${item.placeUserRatingsTotal} yorum`
-              : ''}
-          </Text>
-        </View>
-      ) : null}
+      {appInfoReplacement ? (
+        appInfoReplacement
+      ) : (
+        <>
+          <Text style={slideStyles.sectionLabel}>Uygulama bilgileri</Text>
+          <View style={slideStyles.metricsRow}>
+            <View style={slideStyles.metricTile}>
+              <Ionicons name="time-outline" size={22} color={ACCENT} />
+              <Text style={slideStyles.metricValue}>{item.stopRestDisplay}</Text>
+              <Text style={slideStyles.metricLabel}>Durakta</Text>
+            </View>
+            <View style={slideStyles.metricTile}>
+              <Ionicons name="navigate-outline" size={22} color={ACCENT} />
+              <Text style={slideStyles.metricValue}>
+                {item.legKm != null ? `${item.legKm} km` : '—'}
+              </Text>
+              <Text style={slideStyles.metricLabel}>{item.legModeLabel}</Text>
+            </View>
+            <View style={slideStyles.metricTile}>
+              <Ionicons name="car-outline" size={22} color={ACCENT} />
+              <Text style={slideStyles.metricValue}>
+                {item.legMin != null ? `${item.legMin} dk` : '—'}
+              </Text>
+              <Text style={slideStyles.metricLabel}>Önceki durak</Text>
+            </View>
+          </View>
+          {item.placeRating != null && item.placeRating > 0 ? (
+            <View style={slideStyles.ratingRow}>
+              <Ionicons
+                name="star"
+                size={16}
+                color={GOOGLE_PLACE_RATING_STAR_COLOR}
+                style={slideStyles.ratingStarIcon}
+              />
+              <Text style={slideStyles.ratingLine}>
+                Google puanı (durak eklenirken kayıtlı): {item.placeRating.toFixed(1)}
+                {item.placeUserRatingsTotal != null && item.placeUserRatingsTotal > 0
+                  ? ` · ${item.placeUserRatingsTotal} yorum`
+                  : ''}
+              </Text>
+            </View>
+          ) : null}
+        </>
+      )}
 
       <Text style={slideStyles.sectionLabel}>Özet bilgiler</Text>
       {item.webLoading ? (

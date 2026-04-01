@@ -136,7 +136,7 @@ export function StopCard(props: Props) {
   const appTheme = useAppTheme();
   const { mode } = useThemeMode();
   const expensePursePalette = useMemo(() => {
-    if (mode === 'dark') {
+    if (mode !== 'light') {
       return {
         shellBg: 'rgba(251, 191, 36, 0.16)',
         shellBorder: 'rgba(245, 158, 11, 0.5)',

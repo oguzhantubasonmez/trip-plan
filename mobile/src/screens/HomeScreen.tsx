@@ -1,4 +1,4 @@
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { CompositeNavigationProp } from '@react-navigation/native';
 import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -227,6 +227,7 @@ export function HomeScreen(props: {
   }) => void;
 }) {
   const navigation = useNavigation<HomeScreenNav>();
+  const route = useRoute<RouteProp<HomeStackParamList, 'Home'>>();
   const theme = useAppTheme();
   const { mode } = useThemeMode();
   const styles = useMemo(() => createHomeStyles(theme), [theme]);
@@ -244,8 +245,18 @@ export function HomeScreen(props: {
   const [createdTripsExpanded, setCreatedTripsExpanded] = useState(false);
   const [invitedTripsExpanded, setInvitedTripsExpanded] = useState(false);
   const [placeDiscoverOpen, setPlaceDiscoverOpen] = useState(false);
+  const [discoverSeedPlaceId, setDiscoverSeedPlaceId] = useState<string | null>(null);
+  const clearDiscoverSeed = useCallback(() => setDiscoverSeedPlaceId(null), []);
   const [homeCopy, setHomeCopy] = useState<HomeScreenCopy>(() => ({ ...EMPTY_HOME_SCREEN_COPY }));
   const uid = auth.currentUser?.uid;
+
+  useEffect(() => {
+    const id = route.params?.openDiscoverPlaceId?.trim();
+    if (!id) return;
+    setDiscoverSeedPlaceId(id);
+    setPlaceDiscoverOpen(true);
+    navigation.setParams({ openDiscoverPlaceId: undefined });
+  }, [route.params?.openDiscoverPlaceId, navigation]);
 
   useEffect(() => {
     const unsub = subscribeHomeScreenCopy(setHomeCopy);
@@ -258,54 +269,72 @@ export function HomeScreen(props: {
 
   const heroGrad = useMemo((): [string, string, string] => {
     switch (mode) {
+      case 'ocean':
+        return ['#1D4ED8', '#2563EB', '#0E7490'];
       case 'dark':
         return ['#0369A1', '#4F46E5', '#7C3AED'];
       case 'light':
         return ['#38BDF8', '#818CF8', '#F472B6'];
-      case 'ocean':
-        return ['#0E7490', '#155E75', '#0F766E'];
+      case 'lavender':
+        return ['#6D28D9', '#7C3AED', '#A21CAF'];
+      case 'ember':
+        return ['#B45309', '#D97706', '#CA8A04'];
+      case 'ruby':
+        return ['#BE123C', '#DB2777', '#A21CAF'];
       case 'sunset':
         return ['#DB2777', '#EA580C', '#9333EA'];
       case 'forest':
         return ['#166534', '#15803D', '#65A30D'];
       default:
-        return ['#0369A1', '#4F46E5', '#7C3AED'];
+        return ['#1D4ED8', '#2563EB', '#0E7490'];
     }
   }, [mode]);
 
   /** Keşif CTA — teal → mavi → mor */
   const discoverGrad = useMemo((): [string, string, string] => {
     switch (mode) {
+      case 'ocean':
+        return ['#22D3EE', '#3B82F6', '#6366F1'];
       case 'dark':
         return ['#0D9488', '#0284C7', '#A855F7'];
       case 'light':
         return ['#06B6D4', '#2563EB', '#DB2777'];
-      case 'ocean':
-        return ['#06B6D4', '#6366F1', '#0EA5E9'];
+      case 'lavender':
+        return ['#A78BFA', '#C084FC', '#E879F9'];
+      case 'ember':
+        return ['#FBBF24', '#FB923C', '#F97316'];
+      case 'ruby':
+        return ['#FB7185', '#F472B6', '#EC4899'];
       case 'sunset':
         return ['#F97316', '#EC4899', '#7C3AED'];
       case 'forest':
         return ['#22C55E', '#059669', '#0284C7'];
       default:
-        return ['#0D9488', '#0284C7', '#A855F7'];
+        return ['#22D3EE', '#3B82F6', '#6366F1'];
     }
   }, [mode]);
 
   /** Yeni rota CTA — indigo / mor / sıcak vurgu (keşfetten ayrışır) */
   const newTripGrad = useMemo((): [string, string, string] => {
     switch (mode) {
+      case 'ocean':
+        return ['#1E40AF', '#2563EB', '#0891B2'];
       case 'dark':
         return ['#4F46E5', '#7C3AED', '#DB2777'];
       case 'light':
         return ['#6366F1', '#A855F7', '#EC4899'];
-      case 'ocean':
-        return ['#4338CA', '#2563EB', '#0891B2'];
+      case 'lavender':
+        return ['#5B21B6', '#7C3AED', '#C026D3'];
+      case 'ember':
+        return ['#EA580C', '#D97706', '#CA8A04'];
+      case 'ruby':
+        return ['#9D174D', '#BE123C', '#DB2777'];
       case 'sunset':
         return ['#7C3AED', '#DB2777', '#EA580C'];
       case 'forest':
         return ['#5B21B6', '#059669', '#CA8A04'];
       default:
-        return ['#4F46E5', '#7C3AED', '#DB2777'];
+        return ['#1E40AF', '#2563EB', '#0891B2'];
     }
   }, [mode]);
 
@@ -737,7 +766,25 @@ export function HomeScreen(props: {
               </LinearGradient>
             </Pressable>
           </View>
-          <PlaceDiscoverModal visible={placeDiscoverOpen} onClose={() => setPlaceDiscoverOpen(false)} />
+          <PlaceDiscoverModal
+            visible={placeDiscoverOpen}
+            seedPlaceId={discoverSeedPlaceId}
+            onSeedConsumed={clearDiscoverSeed}
+            onClose={() => {
+              setPlaceDiscoverOpen(false);
+              setDiscoverSeedPlaceId(null);
+            }}
+            onNavigateCreateTripWithSecondStop={(p) => {
+              setPlaceDiscoverOpen(false);
+              setDiscoverSeedPlaceId(null);
+              navigation.navigate('CreateTrip', { secondStopFromDiscover: p });
+            }}
+            onOpenTrip={(tripId) => {
+              setPlaceDiscoverOpen(false);
+              setDiscoverSeedPlaceId(null);
+              props.onOpenTrip(tripId);
+            }}
+          />
           <View style={{ height: theme.space.md }} />
 
           <Pressable

@@ -93,11 +93,13 @@ import {
 } from '../utils/tripInviteLink';
 import { normalizeStopExtraExpenses, stopExtraTotal } from '../utils/stopExpenses';
 import {
+  buildPlanExportFilename,
   buildPlanSummaryCsv,
   buildPlanSummaryExportInput,
-  buildPlanSummaryHtml,
   sharePlanExportFile,
+  triggerBrowserFileDownload,
 } from '../utils/planSummaryExport';
+import { buildPlanSummaryPresentationHtmlAsync } from '../utils/planSummaryPresentationHtml';
 
 const RSVP_LABELS: Record<string, string> = {
   going: 'Katılıyorum',
@@ -155,6 +157,11 @@ export function TripDetailScreen(props: {
   const [myExpenseTypes, setMyExpenseTypes] = useState<ExpenseType[]>([]);
   const [planExtraBreakdownOpen, setPlanExtraBreakdownOpen] = useState(false);
   const [planExportBusy, setPlanExportBusy] = useState(false);
+  const [planHtmlProgress, setPlanHtmlProgress] = useState<string | null>(null);
+  const [webHtmlDownloadModal, setWebHtmlDownloadModal] = useState<{
+    filename: string;
+    content: string;
+  } | null>(null);
   const [tripHeaderMenuVisible, setTripHeaderMenuVisible] = useState(false);
   const tripScreenMountedRef = useRef(true);
   const [deleteStopTarget, setDeleteStopTarget] = useState<StopType | null>(null);
@@ -193,8 +200,8 @@ export function TripDetailScreen(props: {
   const { mode } = useThemeMode();
   const styles = useMemo(() => createTripDetailStyles(appTheme), [appTheme]);
   const chatPanelGradientColors = useMemo((): [string, string, string] => {
-    if (mode === 'dark') return ['#0B1524', '#132A42', '#1B3654'];
-    return ['#C8E8F7', '#E2F3FB', '#FFF4E8'];
+    if (mode === 'light') return ['#C8E8F7', '#E2F3FB', '#FFF4E8'];
+    return ['#0B1524', '#132A42', '#1B3654'];
   }, [mode]);
   function tripPollBarGradient(i: number): [string, string] {
     const pairs: [string, string][] = [
@@ -584,6 +591,25 @@ export function TripDetailScreen(props: {
     });
     return groups;
   }, [routeOrderedStops, trip?.startDate]);
+
+  /** Harita navigasyonu: yalnızca seçilen günün konumlu durakları Google Maps’e gider. */
+  const mapNavigationDayGroups = useMemo(() => {
+    return stopDayGroups
+      .map((g) => ({
+        dayYmd: g.dayYmd,
+        dayLabel: g.dayLabel,
+        stops: g.entries
+          .map((e) => e.stop)
+          .filter(
+            (s) =>
+              s.coords?.latitude != null &&
+              s.coords?.longitude != null &&
+              Number.isFinite(s.coords!.latitude) &&
+              Number.isFinite(s.coords!.longitude)
+          ),
+      }))
+      .filter((g) => g.stops.length > 0);
+  }, [stopDayGroups]);
 
   const toggleStopDaySection = useCallback((dayYmd: string) => {
     setExpandedStopDayYmd((prev) => {
@@ -1046,10 +1072,13 @@ export function TripDetailScreen(props: {
     }
   }
 
-  async function handleExportPlanHtml() {
+  async function runPlanHtmlExport() {
     const t = trip;
     if (!t) return;
     setPlanExportBusy(true);
+    setPlanHtmlProgress(
+      'Wikipedia / Google özetleri yüklenir; çok duraklı rotalarda birkaç dakika sürebilir.'
+    );
     setError(null);
     try {
       const input = buildPlanSummaryExportInput({
@@ -1064,20 +1093,45 @@ export function TripDetailScreen(props: {
         goingCount,
         extraCostsByCategory,
       });
-      const html = buildPlanSummaryHtml(input);
+      const comments = tripComments.map((c) => ({
+        authorLabel: displayName(c.userId),
+        message: c.message,
+        timeLabel: formatTripCommentTime(c.timestamp),
+      }));
+      const html = await buildPlanSummaryPresentationHtmlAsync({
+        input,
+        routeOrderedStops,
+        comments,
+        onProgress: (done, total) => {
+          setPlanHtmlProgress(`Duraklar hazırlanıyor (${done}/${total})…`);
+        },
+      });
+      const filename = buildPlanExportFilename(t.tripId, t.title, 'html');
+      if (Platform.OS === 'web') {
+        setWebHtmlDownloadModal({ filename, content: html });
+        return;
+      }
       await sharePlanExportFile({
         tripId: t.tripId,
         tripTitle: t.title,
         extension: 'html',
         content: html,
         mimeType: 'text/html',
-        dialogTitle: 'Plan özeti (Özet Tablo)',
+        dialogTitle: 'Plan özeti (sunum HTML)',
       });
     } catch (e: any) {
-      setError(e?.message || 'HTML dışa aktarılamadı.');
+      const msg = e?.message || 'HTML dışa aktarılamadı.';
+      setError(msg);
+      Alert.alert('HTML dışa aktarım', msg);
     } finally {
       setPlanExportBusy(false);
+      setPlanHtmlProgress(null);
     }
+  }
+
+  function handleExportPlanHtml() {
+    if (!trip) return;
+    void runPlanHtmlExport();
   }
 
   function proposalSummary(p: TripProposal): string {
@@ -1596,12 +1650,15 @@ export function TripDetailScreen(props: {
               ]}
               disabled={planExportBusy}
               accessibilityRole="button"
-              accessibilityLabel="Plan özetini özet HTML tablo olarak paylaş"
+              accessibilityLabel="Plan özetini rota sunumu formatında HTML olarak oluştur ve paylaş"
             >
               <Ionicons name="document-text-outline" size={18} color={appTheme.color.primaryDark} />
-              <Text style={styles.planExportBtnText}>Özet Tablo</Text>
+              <Text style={styles.planExportBtnText}>Sunum (HTML)</Text>
             </Pressable>
           </View>
+          {planHtmlProgress ? (
+            <Text style={[styles.mutedCompact, { marginTop: appTheme.space.xs }]}>{planHtmlProgress}</Text>
+          ) : null}
           {(isAdmin || isEditor) && (
             <>
               <View style={styles.blockSpacer} />
@@ -1855,7 +1912,12 @@ export function TripDetailScreen(props: {
               <View style={styles.mapContainer}>
                 {(() => {
                   const { NativeMapSection } = require('../components/NativeMapSection');
-                  return <NativeMapSection stops={routeOrderedStops} />;
+                  return (
+                    <NativeMapSection
+                      stops={routeOrderedStops}
+                      navigationDayGroups={mapNavigationDayGroups}
+                    />
+                  );
                 })()}
               </View>
             )}
@@ -2388,6 +2450,51 @@ export function TripDetailScreen(props: {
             </Pressable>
           </View>
         </View>
+      </Modal>
+
+      <Modal
+        visible={webHtmlDownloadModal != null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setWebHtmlDownloadModal(null)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setWebHtmlDownloadModal(null)}>
+          <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.modalTitle}>HTML hazır</Text>
+            <Text style={styles.mutedCompact}>
+              Web tarayıcıları, uzun süren hazırlıktan sonra otomatik indirmeyi çoğu zaman engeller.
+              Dosyayı kaydetmek için «İndir»e dokunun.
+            </Text>
+            {webHtmlDownloadModal ? (
+              <Text style={[styles.muted, { marginTop: appTheme.space.sm }]} numberOfLines={2}>
+                {webHtmlDownloadModal.filename}
+              </Text>
+            ) : null}
+            <View style={{ height: appTheme.space.md }} />
+            <PrimaryButton
+              title="İndir"
+              onPress={() => {
+                if (!webHtmlDownloadModal) return;
+                triggerBrowserFileDownload(
+                  webHtmlDownloadModal.filename,
+                  webHtmlDownloadModal.content,
+                  'text/html'
+                );
+                setWebHtmlDownloadModal(null);
+              }}
+            />
+            <View style={{ height: appTheme.space.sm }} />
+            <Pressable
+              onPress={() => setWebHtmlDownloadModal(null)}
+              style={({ pressed }) => [pressed && { opacity: 0.85 }]}
+              accessibilityRole="button"
+            >
+              <Text style={{ textAlign: 'center', color: appTheme.color.muted, fontWeight: '600' }}>
+                Kapat
+              </Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
       </Modal>
     </Screen>
   );

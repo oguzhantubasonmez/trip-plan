@@ -14,6 +14,17 @@ export type ExpenseType = {
   name: string;
 };
 
+/** Profil > Kaydedilen yerler (Yer keşfet’ten). */
+export type SavedPlaceEntry = {
+  id: string;
+  googlePlaceId: string;
+  displayName: string;
+  latitude: number;
+  longitude: number;
+  formattedAddress?: string;
+  savedAtMs: number;
+};
+
 /** Sabit id’ler; durak masrafı ve profil listesi bu kimliklerle hizalanır. */
 export const DEFAULT_EXPENSE_TYPES: ExpenseType[] = [
   { id: 'et_std_yemek', name: 'Yemek' },
@@ -49,6 +60,30 @@ function parseExpenseTypes(v: any): ExpenseType[] {
   return out;
 }
 
+const MAX_SAVED_PLACES = 80;
+
+function parseSavedPlaces(v: any): SavedPlaceEntry[] {
+  if (!Array.isArray(v)) return [];
+  const out: SavedPlaceEntry[] = [];
+  for (const x of v) {
+    if (!x || typeof x !== 'object') continue;
+    const id = typeof x.id === 'string' ? x.id.trim() : '';
+    const googlePlaceId = typeof x.googlePlaceId === 'string' ? x.googlePlaceId.trim() : '';
+    const displayName = typeof x.displayName === 'string' ? x.displayName.trim() : '';
+    const lat = typeof x.latitude === 'number' ? x.latitude : Number(x.latitude);
+    const lng = typeof x.longitude === 'number' ? x.longitude : Number(x.longitude);
+    const savedAtMs =
+      typeof x.savedAtMs === 'number' && Number.isFinite(x.savedAtMs) ? x.savedAtMs : Date.now();
+    if (!id || !googlePlaceId || !displayName || !Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    const formattedAddress =
+      typeof x.formattedAddress === 'string' && x.formattedAddress.trim()
+        ? x.formattedAddress.trim()
+        : undefined;
+    out.push({ id, googlePlaceId, displayName, latitude: lat, longitude: lng, formattedAddress, savedAtMs });
+  }
+  return out.slice(0, MAX_SAVED_PLACES);
+}
+
 export type UserProfile = {
   uid: string;
   phoneNumber: string;
@@ -64,6 +99,7 @@ export type UserProfile = {
   friends?: string[];
   /** Kullanıcının tanımladığı ekstra masraf türleri (durak masrafında seçilir) */
   expenseTypes?: ExpenseType[];
+  savedPlaces?: SavedPlaceEntry[];
 };
 
 export async function getUserProfile(uid: string): Promise<UserProfile | null> {
@@ -91,6 +127,7 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
     })(),
     friends: v.friends || [],
     expenseTypes: mergeDefaultExpenseTypes(parseExpenseTypes(v.expenseTypes)),
+    savedPlaces: parseSavedPlaces(v.savedPlaces),
   };
 }
 
@@ -172,6 +209,7 @@ export async function updateUserProfile(
     expenseTypes?: ExpenseType[];
     /** E.164; rehber eşleştirmesi için */
     phoneNumber?: string;
+    savedPlaces?: SavedPlaceEntry[];
   }
 ): Promise<void> {
   const ref = doc(db, 'users', uid);
@@ -191,7 +229,51 @@ export async function updateUserProfile(
     const p = String(data.phoneNumber).trim();
     updates.phoneNumber = p ? coerceStoredPhoneE164(p) : '';
   }
+  if (data.savedPlaces !== undefined) {
+    updates.savedPlaces = parseSavedPlaces(data.savedPlaces).slice(0, MAX_SAVED_PLACES);
+  }
   await updateDoc(ref, updates);
+}
+
+export async function upsertSavedPlaceForUser(
+  uid: string,
+  params: {
+    googlePlaceId: string;
+    displayName: string;
+    latitude: number;
+    longitude: number;
+    formattedAddress?: string;
+  }
+): Promise<void> {
+  const gid = params.googlePlaceId.trim();
+  if (!gid) throw new Error('Yer kimliği yok.');
+  const profile = await getUserProfile(uid);
+  const prev = parseSavedPlaces(profile?.savedPlaces);
+  const now = Date.now();
+  const existing = prev.find((x) => x.googlePlaceId === gid);
+  const id = existing?.id ?? `sp_${now}_${Math.random().toString(36).slice(2, 10)}`;
+  const entry: SavedPlaceEntry = {
+    id,
+    googlePlaceId: gid,
+    displayName: params.displayName.trim() || 'Kayıtlı yer',
+    latitude: params.latitude,
+    longitude: params.longitude,
+    formattedAddress: params.formattedAddress?.trim() || undefined,
+    savedAtMs: now,
+  };
+  const rest = prev.filter((x) => x.googlePlaceId !== gid);
+  const next = [entry, ...rest].slice(0, MAX_SAVED_PLACES);
+  await updateUserProfile(uid, { savedPlaces: next });
+}
+
+export async function removeSavedPlaceForUser(uid: string, googlePlaceId: string): Promise<void> {
+  const gid = googlePlaceId.trim();
+  if (!gid) return;
+  const profile = await getUserProfile(uid);
+  const prev = parseSavedPlaces(profile?.savedPlaces);
+  const next = prev.filter((x) => x.googlePlaceId !== gid);
+  if (next.length === prev.length) return;
+  await updateUserProfile(uid, { savedPlaces: next });
 }
 
 export async function getUsersByUids(uids: string[]): Promise<Map<string, UserProfile>> {

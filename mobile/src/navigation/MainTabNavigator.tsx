@@ -31,6 +31,18 @@ function DiscoverStackNavigator({
             onOpenFriends={() =>
               tabNavigation.navigate('HomeTab', { screen: 'FriendsHub' })
             }
+            onNavigateCreateTripWithSecondStop={(p) =>
+              tabNavigation.navigate('HomeTab', {
+                screen: 'CreateTrip',
+                params: { secondStopFromDiscover: p },
+              })
+            }
+            onOpenTrip={(tripId) =>
+              tabNavigation.navigate('HomeTab', {
+                screen: 'TripDetail',
+                params: { tripId },
+              })
+            }
           />
         )}
       </DiscoverStack.Screen>
@@ -51,6 +63,12 @@ function ProfileStackNavigator({
             variant="tab"
             onOpenFriends={() =>
               tabNavigation.navigate('HomeTab', { screen: 'FriendsHub' })
+            }
+            onOpenSavedPlace={(googlePlaceId) =>
+              tabNavigation.navigate('HomeTab', {
+                screen: 'Home',
+                params: { openDiscoverPlaceId: googlePlaceId },
+              })
             }
           />
         )}
