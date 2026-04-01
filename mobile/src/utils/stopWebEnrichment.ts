@@ -8,17 +8,25 @@ const NOMINATIM_UA = 'RouteWise/1.0 (trip export; https://expo.dev)';
 
 /**
  * Wikimedia Policy: https://foundation.wikimedia.org/wiki/Policy:User-Agent_policy
- * Tarayıcı kendi UA’sını gönderir; React Native (OkHttp) genelde yetersiz kalır ve REST/API 403 vb. dönebilir.
+ * - Android OkHttp: header değerinde ASCII dışı karakter (ör. Türkçe) IllegalArgumentException → uygulama çöküşü.
+ * - Web: tarayıcı kendi User-Agent’ını kullanır; burada UA set etmiyoruz (polyfill/engelleme riski).
+ * - iOS/Android: tanımlayıcı UA gönderilir.
  */
-const WIKIPEDIA_UA = 'RouteWise/1.0 (https://expo.dev; rota planlayıcı; Android iOS Web)';
+const WIKIPEDIA_UA =
+  'RouteWise/1.0 (+https://expo.dev; trip planning; contact via Expo app listing)';
 
-const wikiRequestInit: RequestInit = {
-  headers: {
-    'User-Agent': WIKIPEDIA_UA,
-    'Api-User-Agent': WIKIPEDIA_UA,
-    Accept: 'application/json',
-  },
-};
+function wikiFetchInit(): RequestInit {
+  if (Platform.OS === 'web') {
+    return { headers: { Accept: 'application/json' } };
+  }
+  return {
+    headers: {
+      'User-Agent': WIKIPEDIA_UA,
+      'Api-User-Agent': WIKIPEDIA_UA,
+      Accept: 'application/json',
+    },
+  };
+}
 
 export type PptxStopWebBlock = {
   bullets: string[];
@@ -123,7 +131,7 @@ async function wikiGeosearchTitles(
     `https://${lang}.wikipedia.org/w/api.php?action=query&list=geosearch` +
     `&gscoord=${encodeURIComponent(String(lat))}|${encodeURIComponent(String(lon))}` +
     `&gsradius=2500&gslimit=${limit}&format=json&origin=*`;
-  const data = await fetchJson<{ query?: { geosearch?: { title: string }[] } }>(u, 8000, wikiRequestInit);
+  const data = await fetchJson<{ query?: { geosearch?: { title: string }[] } }>(u, 8000, wikiFetchInit());
   const rows = data?.query?.geosearch || [];
   const out: string[] = [];
   for (const g of rows) {
@@ -139,7 +147,7 @@ async function wikiSearchTitles(lang: 'tr' | 'en', q: string, limit: number): Pr
   const u =
     `https://${lang}.wikipedia.org/w/api.php?action=query&list=search&format=json&origin=*` +
     `&srlimit=${limit}&srsearch=${encodeURIComponent(qq)}`;
-  const data = await fetchJson<{ query?: { search?: { title: string }[] } }>(u, 8000, wikiRequestInit);
+  const data = await fetchJson<{ query?: { search?: { title: string }[] } }>(u, 8000, wikiFetchInit());
   const rows = data?.query?.search || [];
   const out: string[] = [];
   for (const s of rows) {
@@ -182,7 +190,7 @@ async function wikiPageLeadRich(lang: 'tr' | 'en', title: string): Promise<WikiS
     `https://${lang}.wikipedia.org/w/api.php?action=query&prop=extracts|pageimages&redirects=1` +
     `&exintro=1&explaintext=1&piprop=thumbnail&pithumbsize=800` +
     `&format=json&origin=*&titles=${encodeURIComponent(title)}`;
-  const data = await fetchJson<{ query?: { pages?: Record<string, WikiQueryPage> } }>(u, 8000, wikiRequestInit);
+  const data = await fetchJson<{ query?: { pages?: Record<string, WikiQueryPage> } }>(u, 8000, wikiFetchInit());
   const pages = data?.query?.pages;
   if (!pages) return null;
   const page = Object.values(pages)[0];
@@ -201,7 +209,7 @@ async function wikiPageLeadRich(lang: 'tr' | 'en', title: string): Promise<WikiS
 async function wikiPageSummary(lang: 'tr' | 'en', title: string): Promise<WikiSummaryRich | null> {
   const enc = encodeURIComponent(title.replace(/ /g, '_'));
   const u = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${enc}`;
-  const res = await fetchWithTimeout(u, 8000, wikiRequestInit);
+  const res = await fetchWithTimeout(u, 8000, wikiFetchInit());
   if (!res || !res.ok) return null;
   try {
     const j = (await res.json()) as {

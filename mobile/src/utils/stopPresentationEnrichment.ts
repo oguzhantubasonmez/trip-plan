@@ -4,7 +4,7 @@ import type { PlanSummaryStopRow } from './planSummaryExport';
 import type { StopPresentationPayload } from './presentationModel';
 import { fetchPresentationWebForStop } from './stopWebEnrichment';
 
-const CACHE_PREFIX = 'rw_pres:v10:';
+const CACHE_PREFIX = 'rw_pres:v11:';
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const CONCURRENCY = 4;
 
