@@ -1,6 +1,6 @@
 import type { Stop } from '../types/trip';
 import type { StopPresentationWebBlock } from './stopWebEnrichment';
-import { fetchPresentationWebForStop } from './stopWebEnrichment';
+import { fetchPresentationWebForStop, routeOverviewStaticMapUrl } from './stopWebEnrichment';
 import {
   allocateFuelTlByDay,
   computeDayTotals,
@@ -153,8 +153,10 @@ export function buildPlanSummaryPresentationHtml(params: {
   input: PlanSummaryExportInput;
   enrichments: StopPresentationWebBlock[];
   comments: PlanHtmlCommentLine[];
+  /** Rota haritası — statik görsel (HTML üstü). */
+  routeMapImageUrl?: string | null;
 }): string {
-  const { input, enrichments, comments } = params;
+  const { input, enrichments, comments, routeMapImageUrl } = params;
   const title = escapeHtml(input.tripTitle);
   const fuelShareByDay = allocateFuelTlByDay(input.dayGroups, input.fuelTl);
 
@@ -348,11 +350,45 @@ export function buildPlanSummaryPresentationHtml(params: {
     .comment-time { font-size: 0.75rem; color: #94a3b8; }
     .comment-msg { margin: 0; font-size: 0.9rem; line-height: 1.45; color: #e2e8f0; white-space: pre-wrap; }
     .foot { margin-top: 32px; font-size: 0.78rem; color: #64748b; text-align: center; }
+    .route-map-figure {
+      margin: 0 0 20px;
+      border-radius: 18px;
+      overflow: hidden;
+      border: 1px solid rgba(56, 189, 248, 0.28);
+      box-shadow: 0 16px 40px rgba(0,0,0,0.35);
+      background: #0f172a;
+    }
+    .route-map-figure figcaption {
+      margin: 0;
+      padding: 10px 14px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      background: rgba(15, 23, 42, 0.95);
+      border-top: 1px solid rgba(148, 163, 184, 0.12);
+    }
+    .route-map-img {
+      width: 100%;
+      display: block;
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+      vertical-align: middle;
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <p class="notice">Bu sayfa rota sunumuna benzer şekilde üretildi: her durak için Wikipedia / Google verileri çevrimiçi alınmış olabilir. Görseller harici sunuculardan yüklenir.</p>
+    ${
+      routeMapImageUrl && String(routeMapImageUrl).trim()
+        ? `<figure class="route-map-figure">
+      <img class="route-map-img" src="${escapeAttr(String(routeMapImageUrl).trim())}" alt="Rota haritası — duraklar arası hat" loading="eager" />
+      <figcaption>Rota haritası (özet)</figcaption>
+    </figure>`
+        : ''
+    }
     <header class="hero">
       <div class="brand">RouteWise</div>
       <h1>${title}</h1>
@@ -392,8 +428,12 @@ export function buildPlanSummaryPresentationHtml(params: {
 </html>`;
 }
 
+/** Wikipedia / Nominatim / Places ile çakışmayı azaltmak için eşzamanlı istek üst sınırı. */
+const PLAN_HTML_ENRICH_CONCURRENCY = 4;
+
 /**
- * Her durak için sunum zenginleştirmesini çeker (ağ istekleri; çok durakta uzun sürebilir).
+ * Her durak için sunum zenginleştirmesini çeker (ağ istekleri).
+ * Sıralı yerine sınırlı paralellik: uzun rotalarda süre belirgin şekilde kısalır.
  */
 export async function enrichStopsForPlanPresentationHtml(
   routeOrderedStops: Stop[],
@@ -401,13 +441,37 @@ export async function enrichStopsForPlanPresentationHtml(
   onProgress?: (done: number, total: number) => void
 ): Promise<StopPresentationWebBlock[]> {
   const n = routeOrderedStops.length;
-  const out: StopPresentationWebBlock[] = [];
-  for (let i = 0; i < n; i++) {
-    const stop = routeOrderedStops[i]!;
-    const row = rows[i]!;
-    onProgress?.(i + 1, n);
-    out.push(await fetchPresentationWebForStop(stop, row));
+  const out: StopPresentationWebBlock[] = new Array(n);
+  let completed = 0;
+  const bump = () => {
+    completed += 1;
+    onProgress?.(completed, n);
+  };
+
+  let nextIndex = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = nextIndex++;
+      if (i >= n) return;
+      const stop = routeOrderedStops[i]!;
+      const row = rows[i]!;
+      try {
+        out[i] = await fetchPresentationWebForStop(stop, row);
+      } catch {
+        out[i] = {
+          summaryBullets: [],
+          summarySourceLine: '',
+          reviewBullets: [],
+          reviewSourceLine: '',
+          fromGooglePlaces: false,
+        };
+      }
+      bump();
+    }
   }
+
+  const pool = Math.min(PLAN_HTML_ENRICH_CONCURRENCY, Math.max(1, n));
+  await Promise.all(Array.from({ length: pool }, () => worker()));
   return out;
 }
 
@@ -417,6 +481,7 @@ export async function buildPlanSummaryPresentationHtmlAsync(params: {
   comments: PlanHtmlCommentLine[];
   onProgress?: (done: number, total: number) => void;
 }): Promise<string> {
+  const routeMapImageUrl = routeOverviewStaticMapUrl(params.routeOrderedStops, 640, 360);
   const enrichments = await enrichStopsForPlanPresentationHtml(
     params.routeOrderedStops,
     params.input.stops,
@@ -426,5 +491,6 @@ export async function buildPlanSummaryPresentationHtmlAsync(params: {
     input: params.input,
     enrichments,
     comments: params.comments,
+    routeMapImageUrl,
   });
 }

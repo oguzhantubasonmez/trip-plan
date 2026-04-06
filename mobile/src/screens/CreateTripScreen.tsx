@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useRoute, type RouteProp } from '@react-navigation/native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useFocusEffect, useRoute, type RouteProp } from '@react-navigation/native';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -17,6 +17,12 @@ import { TextField } from '../components/TextField';
 import { TimePickerField } from '../components/TimePickerField';
 import { auth } from '../lib/firebase';
 import type { HomeStackParamList } from '../navigation/types';
+import {
+  consumeTripCreationCredit,
+  effectiveTripCreationCredits,
+  NoTripCreationCreditsError,
+} from '../services/tripCreationCredits';
+import { getUserProfile } from '../services/userProfile';
 import { addStop, createTrip } from '../services/trips';
 import type { PlacesSearchMode } from '../services/places';
 import { useAppTheme } from '../ThemeContext';
@@ -54,6 +60,18 @@ export function CreateTripScreen(props: {
   } | null>(null);
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
+  const [creditsHint, setCreditsHint] = useState<number | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      const uid = auth.currentUser?.uid;
+      if (!uid) {
+        setCreditsHint(null);
+        return;
+      }
+      void getUserProfile(uid).then((p) => setCreditsHint(effectiveTripCreationCredits(p)));
+    }, [])
+  );
 
   function toISODate(d: Date) {
     const y = d.getFullYear();
@@ -106,6 +124,13 @@ export function CreateTripScreen(props: {
       setError('Oturum bulunamadı.');
       return;
     }
+    const profileCheck = await getUserProfile(uid);
+    if (effectiveTripCreationCredits(profileCheck) < 1) {
+      setError(
+        'Rota oluşturma hakkın kalmadı. Ana sekmelerin üstündeki alandan «Reklam izle · +1 hak» ile hak kazanabilirsin.'
+      );
+      return;
+    }
     setLoading(true);
     try {
       const tripId = await createTrip({
@@ -153,6 +178,14 @@ export function CreateTripScreen(props: {
             : {}),
         });
       }
+      try {
+        await consumeTripCreationCredit(uid);
+        setCreditsHint((c) => (c != null ? Math.max(0, c - 1) : c));
+      } catch (ce: unknown) {
+        if (!(ce instanceof NoTripCreationCreditsError)) {
+          /* nadir yarış; rota zaten oluştu */
+        }
+      }
       props.onCreated(tripId, { skipAddPlaceModal: !!(firstStop || secondStopFromDiscover) });
     } catch (e: any) {
       setError(e?.message || 'Rota oluşturulamadı.');
@@ -186,6 +219,16 @@ export function CreateTripScreen(props: {
               adı kullanılır.
             </Text>
           </View>
+
+          {creditsHint != null && creditsHint < 1 ? (
+            <View style={styles.creditWarn}>
+              <Text style={styles.creditWarnText}>
+                Rota hakkın bitti. Üstteki «Reklam izle · +1 hak» ile devam edebilirsin.
+              </Text>
+            </View>
+          ) : creditsHint != null ? (
+            <Text style={styles.creditOk}>Kalan rota hakkı: {creditsHint}</Text>
+          ) : null}
 
           <View style={styles.card}>
           {secondStopFromDiscover ? (
@@ -274,7 +317,12 @@ export function CreateTripScreen(props: {
             helperText="Gün içi bitiş veya dönüş."
           />
           <View style={{ height: appTheme.space.md }} />
-          <PrimaryButton title="🚀 Planı oluştur" onPress={submit} loading={loading} />
+          <PrimaryButton
+            title="🚀 Planı oluştur"
+            onPress={submit}
+            loading={loading}
+            disabled={creditsHint != null && creditsHint < 1}
+          />
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -303,6 +351,22 @@ function createCreateTripStyles(t: AppTheme) {
     header: { gap: 8, marginBottom: t.space.lg, alignItems: 'center' },
     heroEmoji: { fontSize: 44, marginBottom: 4 },
     title: { color: t.color.text, fontSize: t.font.hero, fontWeight: '900', textAlign: 'center' },
+    creditWarn: {
+      marginBottom: t.space.md,
+      padding: t.space.md,
+      borderRadius: t.radius.lg,
+      backgroundColor: 'rgba(239, 68, 68, 0.12)',
+      borderWidth: 1,
+      borderColor: t.color.danger,
+    },
+    creditWarnText: { color: t.color.danger, fontSize: t.font.small, fontWeight: '700', lineHeight: 20 },
+    creditOk: {
+      marginBottom: t.space.sm,
+      textAlign: 'center',
+      color: t.color.primaryDark,
+      fontSize: t.font.small,
+      fontWeight: '800',
+    },
     sub: {
       color: t.color.muted,
       fontSize: t.font.body,

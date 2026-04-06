@@ -22,6 +22,7 @@ import { JoinInviteScreen } from './src/screens/JoinInviteScreen';
 import type { AppTheme } from './src/theme';
 import { isAppOnboardingDoneForUser } from './src/services/appOnboardingStorage';
 import { parseTripInviteIdFromUrl } from './src/utils/tripInviteLink';
+import { ensureTripCreationCreditsField } from './src/services/tripCreationCredits';
 
 /** Sadece web: mobilde `window` polyfill olabilir ama `window.location` yok → .search patlar. */
 const getInitialInviteTripId = (): string | null => {
@@ -97,6 +98,12 @@ function AppInner() {
     return () => {
       alive = false;
     };
+  }, [user?.uid]);
+
+  useEffect(() => {
+    const uid = user?.uid;
+    if (!uid) return;
+    void ensureTripCreationCreditsField(uid);
   }, [user?.uid]);
 
   useEffect(() => {

@@ -1076,9 +1076,7 @@ export function TripDetailScreen(props: {
     const t = trip;
     if (!t) return;
     setPlanExportBusy(true);
-    setPlanHtmlProgress(
-      'Wikipedia / Google özetleri yüklenir; çok duraklı rotalarda birkaç dakika sürebilir.'
-    );
+    setPlanHtmlProgress('Özet ve durak içerikleri hazırlanıyor (paralel, birkaç durak genelde 30 sn içinde)…');
     setError(null);
     try {
       const input = buildPlanSummaryExportInput({

@@ -393,6 +393,85 @@ export function staticMapPreviewUrlFallback(lat: number, lon: number, width = 64
   return `https://staticmap.openstreetmap.fr/staticmap.php?center=${lat},${lon}&zoom=14&size=${w}x${h}&maptype=mapnik`;
 }
 
+const ROUTE_STATIC_MAP_MAX_POINTS = 48;
+const ROUTE_STATIC_PATH_MAX_CHARS = 1600;
+
+function zoomHeuristicForSpan(maxLatSpan: number, maxLngSpan: number, refLat: number): number {
+  const lngAdj = maxLngSpan * Math.cos((refLat * Math.PI) / 180);
+  const span = Math.max(maxLatSpan, lngAdj, 1e-6);
+  if (span > 12) return 5;
+  if (span > 6) return 6;
+  if (span > 3) return 7;
+  if (span > 1.2) return 8;
+  if (span > 0.5) return 9;
+  if (span > 0.2) return 10;
+  if (span > 0.08) return 11;
+  if (span > 0.03) return 12;
+  return 13;
+}
+
+/**
+ * Rota detayındaki haritadaki hat ile uyumlu **görsel özet**: duraklar sırasıyla bir polyline.
+ * Google anahtarı varsa Static Maps API; yoksa OSM.fr ile işaretçiler + merkez/zoom.
+ * (Native haritadaki gerçek sürüş polyline’ı değil; duraklar arası doğrusal hat.)
+ */
+export function routeOverviewStaticMapUrl(
+  stops: Stop[],
+  width = 640,
+  height = 320
+): string | undefined {
+  const coords = [...stops]
+    .filter(
+      (s) =>
+        s.coords?.latitude != null &&
+        s.coords?.longitude != null &&
+        Number.isFinite(s.coords.latitude) &&
+        Number.isFinite(s.coords.longitude)
+    )
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .map((s) => ({ lat: s.coords!.latitude, lng: s.coords!.longitude }));
+  if (coords.length === 0) return undefined;
+
+  const w = Math.min(Math.max(80, Math.round(width)), 640);
+  const h = Math.min(Math.max(80, Math.round(height)), 640);
+
+  if (coords.length === 1) {
+    return staticMapPreviewUrl(coords[0]!.lat, coords[0]!.lng, w, h);
+  }
+
+  let pathCoords = coords;
+  if (pathCoords.length > ROUTE_STATIC_MAP_MAX_POINTS) {
+    const step = Math.ceil(pathCoords.length / ROUTE_STATIC_MAP_MAX_POINTS);
+    pathCoords = pathCoords.filter((_, i) => i % step === 0 || i === pathCoords.length - 1);
+  }
+
+  const key = getGoogleMapsApiKey();
+  if (key) {
+    const buildPathStr = (pts: typeof pathCoords) =>
+      pts.map((c) => `${c.lat.toFixed(6)},${c.lng.toFixed(6)}`).join('|');
+    let pathInner = buildPathStr(pathCoords);
+    while (pathInner.length > ROUTE_STATIC_PATH_MAX_CHARS && pathCoords.length > 2) {
+      pathCoords = pathCoords.filter((_, i) => i % 2 === 0 || i === pathCoords.length - 1);
+      pathInner = buildPathStr(pathCoords);
+    }
+    const pathParam = `color:0x38bdf8ff|weight:5|${pathInner}`;
+    return `https://maps.googleapis.com/maps/api/staticmap?size=${w}x${h}&scale=2&maptype=roadmap&path=${encodeURIComponent(pathParam)}&key=${encodeURIComponent(key)}`;
+  }
+
+  const lats = coords.map((c) => c.lat);
+  const lngs = coords.map((c) => c.lng);
+  const latMin = Math.min(...lats);
+  const latMax = Math.max(...lats);
+  const lngMin = Math.min(...lngs);
+  const lngMax = Math.max(...lngs);
+  const clat = (latMin + latMax) / 2;
+  const clng = (lngMin + lngMax) / 2;
+  const z = zoomHeuristicForSpan(latMax - latMin || 0.01, lngMax - lngMin || 0.01, clat);
+  const markerPts = coords.length > 18 ? coords.filter((_, i) => i % 2 === 0 || i === coords.length - 1) : coords;
+  const markers = markerPts.map((c) => `${c.lat.toFixed(5)},${c.lng.toFixed(5)},lightblue1`).join('%7C');
+  return `https://staticmap.openstreetmap.fr/staticmap.php?center=${clat},${clng}&zoom=${z}&size=${w}x${h}&maptype=mapnik&markers=${markers}`;
+}
+
 /** Sunum: Wikipedia/OSM özet dilimi (durak başlığına göre). */
 export type StopPresentationWebBlock = {
   summaryBullets: string[];

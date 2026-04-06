@@ -28,7 +28,7 @@ import {
 import { buildPlanStopRows } from '../utils/planSummaryExport';
 import { buildStopPresentationPayloads, type StopPresentationPayload } from '../utils/presentationModel';
 import { enrichPresentationPayloads } from '../utils/stopPresentationEnrichment';
-import { staticMapPreviewUrlFallback } from '../utils/stopWebEnrichment';
+import { routeOverviewStaticMapUrl, staticMapPreviewUrlFallback } from '../utils/stopWebEnrichment';
 import { GOOGLE_PLACE_RATING_STAR_COLOR } from '../services/places';
 import type { Stop, Trip } from '../types/trip';
 
@@ -159,10 +159,14 @@ function IntroSlide({
   width,
   trip,
   totals,
+  routeMapUri,
+  routeMapFallbackUri,
 }: {
   width: number;
   trip: Trip;
   totals: TripTotalsForIntro;
+  routeMapUri?: string | null;
+  routeMapFallbackUri?: string | null;
 }) {
   const sched = formatTripScheduleSummary(
     trip.startDate,
@@ -181,6 +185,18 @@ function IntroSlide({
 
   return (
     <View style={[slideStyles.page, { width }]}>
+      {routeMapUri ? (
+        <View style={slideStyles.introRouteMapWrap}>
+          <ResilientHeroImage
+            uri={routeMapUri}
+            fallbackUri={routeMapFallbackUri ?? undefined}
+            style={slideStyles.introRouteMapImg}
+          />
+          <Text style={slideStyles.introRouteMapCaption} numberOfLines={1}>
+            Rota haritası (özet)
+          </Text>
+        </View>
+      ) : null}
       <LinearGradient
         colors={['rgba(56, 189, 248, 0.22)', 'rgba(15, 23, 42, 0.95)']}
         start={{ x: 0, y: 0 }}
@@ -422,6 +438,30 @@ const slideStyles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 16,
     overflow: 'hidden',
+  },
+  introRouteMapWrap: {
+    borderRadius: 20,
+    overflow: 'hidden',
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.22)',
+    backgroundColor: CARD,
+  },
+  introRouteMapImg: {
+    width: '100%',
+    height: 176,
+  },
+  introRouteMapCaption: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    fontSize: 10,
+    fontWeight: '800',
+    color: MUTED,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    backgroundColor: 'rgba(15, 23, 42, 0.92)',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(148, 163, 184, 0.12)',
   },
   introHero: {
     borderRadius: 22,
@@ -680,6 +720,20 @@ export function TripPresentationScreen(props: {
     [trip, pages]
   );
 
+  const introRouteMapUri = useMemo(() => routeOverviewStaticMapUrl(routeOrderedStops, 640, 320), [routeOrderedStops]);
+
+  const introRouteMapFallbackUri = useMemo(() => {
+    const s = routeOrderedStops.find(
+      (x) =>
+        x.coords?.latitude != null &&
+        x.coords?.longitude != null &&
+        Number.isFinite(x.coords.latitude) &&
+        Number.isFinite(x.coords.longitude)
+    );
+    if (!s?.coords) return undefined;
+    return staticMapPreviewUrlFallback(s.coords.latitude, s.coords.longitude, 640, 320);
+  }, [routeOrderedStops]);
+
   useEffect(() => {
     let cancelled = false;
     didInitialPagerScroll.current = false;
@@ -816,11 +870,19 @@ export function TripPresentationScreen(props: {
 
       if (item.kind === 'intro') {
         if (!trip || !tripTotals) return <View style={{ width, flex: 1 }} />;
-        return pageShell(<IntroSlide width={width} trip={trip} totals={tripTotals} />);
+        return pageShell(
+          <IntroSlide
+            width={width}
+            trip={trip}
+            totals={tripTotals}
+            routeMapUri={introRouteMapUri}
+            routeMapFallbackUri={introRouteMapFallbackUri}
+          />
+        );
       }
       return pageShell(<PresentationStopSlide item={item.payload} width={width} />);
     },
-    [width, trip, tripTotals, pagerViewportHeight]
+    [width, trip, tripTotals, pagerViewportHeight, introRouteMapUri, introRouteMapFallbackUri]
   );
 
   const renderOrbit: ListRenderItem<PresentationRow> = useCallback(

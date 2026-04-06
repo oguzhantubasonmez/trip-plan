@@ -100,6 +100,8 @@ export type UserProfile = {
   /** Kullanıcının tanımladığı ekstra masraf türleri (durak masrafında seçilir) */
   expenseTypes?: ExpenseType[];
   savedPlaces?: SavedPlaceEntry[];
+  /** Yeni rota oluşturma / kopyalama hakkı (reklam ile artırılabilir). Alan yoksa varsayılan 3 kabul edilir. */
+  tripCreationCredits?: number;
 };
 
 export async function getUserProfile(uid: string): Promise<UserProfile | null> {
@@ -128,6 +130,11 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
     friends: v.friends || [],
     expenseTypes: mergeDefaultExpenseTypes(parseExpenseTypes(v.expenseTypes)),
     savedPlaces: parseSavedPlaces(v.savedPlaces),
+    tripCreationCredits: (() => {
+      const c = v.tripCreationCredits;
+      if (typeof c === 'number' && Number.isFinite(c) && c >= 0) return Math.floor(c);
+      return undefined;
+    })(),
   };
 }
 
@@ -153,6 +160,7 @@ export async function ensureUserDoc(params: {
         avatar: '',
         friends: [],
         expenseTypes: DEFAULT_EXPENSE_TYPES,
+        tripCreationCredits: 3,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       },
@@ -189,6 +197,7 @@ export async function ensureUserDocAfterSignIn(params: { uid: string; email: str
         avatar: '',
         friends: [],
         expenseTypes: DEFAULT_EXPENSE_TYPES,
+        tripCreationCredits: 3,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       },

@@ -2,7 +2,12 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
+import { useEffect } from 'react';
+import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BottomAdBanner } from '../components/BottomAdBanner';
+import { TripCreditsHeader } from '../components/TripCreditsHeader';
+import { getGoogleMobileAdsModule } from '../lib/mobileAds';
 import { DiscoverScreen } from '../screens/DiscoverScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 import { useAppTheme } from '../ThemeContext';
@@ -82,8 +87,19 @@ export function MainTabNavigator() {
   const insets = useSafeAreaInsets();
   const tabBarPadBottom = Math.max(insets.bottom, 10);
 
+  useEffect(() => {
+    const mod = getGoogleMobileAdsModule();
+    if (!mod) return;
+    void mod.MobileAds()
+      .initialize()
+      .catch(() => {});
+  }, []);
+
   return (
-    <Tab.Navigator
+    <View style={{ flex: 1 }}>
+      <TripCreditsHeader />
+      <View style={{ flex: 1, minHeight: 0 }}>
+      <Tab.Navigator
       initialRouteName="HomeTab"
       screenOptions={{
         headerShown: false,
@@ -127,5 +143,8 @@ export function MainTabNavigator() {
         {({ navigation }) => <ProfileStackNavigator tabNavigation={navigation} />}
       </Tab.Screen>
     </Tab.Navigator>
+      </View>
+    <BottomAdBanner />
+    </View>
   );
 }

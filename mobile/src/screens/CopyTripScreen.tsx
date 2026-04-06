@@ -7,6 +7,12 @@ import { Screen } from '../components/Screen';
 import { TextField } from '../components/TextField';
 import { TimePickerField } from '../components/TimePickerField';
 import { auth } from '../lib/firebase';
+import {
+  consumeTripCreationCredit,
+  effectiveTripCreationCredits,
+  NoTripCreationCreditsError,
+} from '../services/tripCreationCredits';
+import { getUserProfile } from '../services/userProfile';
 import { copyTripWithNewSchedule, getTrip } from '../services/trips';
 import { useAppTheme } from '../ThemeContext';
 import type { AppTheme } from '../theme';
@@ -33,6 +39,18 @@ export function CopyTripScreen(props: {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  const [creditsHint, setCreditsHint] = useState<number | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      const uid = auth.currentUser?.uid;
+      if (!uid) {
+        setCreditsHint(null);
+        return;
+      }
+      void getUserProfile(uid).then((p) => setCreditsHint(effectiveTripCreationCredits(p)));
+    }, [])
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -99,6 +117,13 @@ export function CopyTripScreen(props: {
       setError('Oturum bulunamadı.');
       return;
     }
+    const profileCheck = await getUserProfile(uid);
+    if (effectiveTripCreationCredits(profileCheck) < 1) {
+      setError(
+        'Rota oluşturma hakkın kalmadı. Ana sekmelerin üstündeki alandan «Reklam izle · +1 hak» ile hak kazanabilirsin.'
+      );
+      return;
+    }
     setSaving(true);
     try {
       const newId = await copyTripWithNewSchedule({
@@ -110,6 +135,14 @@ export function CopyTripScreen(props: {
         startTime: st,
         endTime: et,
       });
+      try {
+        await consumeTripCreationCredit(uid);
+        setCreditsHint((c) => (c != null ? Math.max(0, c - 1) : c));
+      } catch (ce: unknown) {
+        if (!(ce instanceof NoTripCreationCreditsError)) {
+          /* */
+        }
+      }
       props.onCreated(newId);
     } catch (e: any) {
       setError(e?.message || 'Kopya oluşturulamadı.');
@@ -139,6 +172,16 @@ export function CopyTripScreen(props: {
           Aynı duraklar ve mesafe/yakıt özeti yeni bir rotada oluşturulur; durak günleri seçtiğin başlangıç tarihine göre
           kayar. Yeni rotada yalnızca sensin (admin); katılımcıları tekrar ekleyebilirsin.
         </Text>
+
+        {creditsHint != null && creditsHint < 1 ? (
+          <View style={styles.creditWarn}>
+            <Text style={styles.creditWarnText}>
+              Rota hakkın bitti. Üstteki «Reklam izle · +1 hak» ile devam edebilirsin.
+            </Text>
+          </View>
+        ) : creditsHint != null ? (
+          <Text style={styles.creditOk}>Kalan rota hakkı: {creditsHint}</Text>
+        ) : null}
 
         <View style={{ height: appTheme.space.md }} />
 
@@ -172,7 +215,12 @@ export function CopyTripScreen(props: {
         />
 
         <View style={{ height: appTheme.space.lg }} />
-        <PrimaryButton title="Kopyayı oluştur" onPress={() => void submit()} loading={saving} />
+        <PrimaryButton
+          title="Kopyayı oluştur"
+          onPress={() => void submit()}
+          loading={saving}
+          disabled={creditsHint != null && creditsHint < 1}
+        />
       </KeyboardAvoidingView>
     </Screen>
   );
@@ -184,6 +232,21 @@ function createCopyTripStyles(t: AppTheme) {
     backText: { color: t.color.primary, fontSize: t.font.body, fontWeight: '700' },
     screenTitle: { color: t.color.text, fontSize: t.font.h1, fontWeight: '900' },
     hint: { color: t.color.muted, fontSize: t.font.small, marginTop: 4, lineHeight: 20 },
+    creditWarn: {
+      marginTop: t.space.md,
+      padding: t.space.md,
+      borderRadius: t.radius.lg,
+      backgroundColor: 'rgba(239, 68, 68, 0.12)',
+      borderWidth: 1,
+      borderColor: t.color.danger,
+    },
+    creditWarnText: { color: t.color.danger, fontSize: t.font.small, fontWeight: '700', lineHeight: 20 },
+    creditOk: {
+      marginTop: t.space.sm,
+      color: t.color.primaryDark,
+      fontSize: t.font.small,
+      fontWeight: '800',
+    },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     muted: { color: t.color.muted, fontSize: t.font.body },
   });
