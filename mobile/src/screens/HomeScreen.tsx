@@ -23,9 +23,13 @@ import { AppLogo } from '../components/AppLogo';
 import { HomeWeatherCard } from '../components/HomeWeatherCard';
 import { InboxBellMenu } from '../components/InboxBellMenu';
 import { LeaveTripConfirmModal } from '../components/LeaveTripConfirmModal';
+import { NoTripCreditsModal, type NoTripCreditsVariant } from '../components/NoTripCreditsModal';
 import { PlaceDiscoverModal } from '../components/PlaceDiscoverModal';
 import { Screen } from '../components/Screen';
+import { TabRootSafeAreaTop } from '../components/TabRootScrollChrome';
 import { TripPlanStatusChip } from '../components/TripPlanStatusChip';
+import { useProEntitlement } from '../hooks/useProEntitlement';
+import { useTripCreationCredits } from '../hooks/useTripCreationCredits';
 import { auth } from '../lib/firebase';
 import { getInboxSummary, type InboxSummary } from '../services/activityInbox';
 import {
@@ -40,6 +44,10 @@ import {
   updateTripPlanStatus,
   type TripListMetrics,
 } from '../services/trips';
+import {
+  canCreateNewTrip,
+  canUsePlaceDiscoverFlow,
+} from '../services/tripCreationCredits';
 import type { HomeStackParamList, MainTabParamList } from '../navigation/types';
 import type { Trip, TripPlanStatus } from '../types/trip';
 import { useAppTheme, useThemeMode } from '../ThemeContext';
@@ -227,6 +235,9 @@ export function HomeScreen(props: {
   }) => void;
 }) {
   const navigation = useNavigation<HomeScreenNav>();
+  const goToProfileTab = useCallback(() => {
+    navigation.navigate('ProfileTab', { screen: 'Profile' });
+  }, [navigation]);
   const route = useRoute<RouteProp<HomeStackParamList, 'Home'>>();
   const theme = useAppTheme();
   const { mode } = useThemeMode();
@@ -249,14 +260,40 @@ export function HomeScreen(props: {
   const clearDiscoverSeed = useCallback(() => setDiscoverSeedPlaceId(null), []);
   const [homeCopy, setHomeCopy] = useState<HomeScreenCopy>(() => ({ ...EMPTY_HOME_SCREEN_COPY }));
   const uid = auth.currentUser?.uid;
+  const tripCredits = useTripCreationCredits();
+  const { isPro } = useProEntitlement();
+  const [noCreditsOpen, setNoCreditsOpen] = useState(false);
+  const [noCreditsVariant, setNoCreditsVariant] = useState<NoTripCreditsVariant>('createTrip');
+  const pendingDiscoverPlaceRef = useRef<string | null>(null);
 
   useEffect(() => {
     const id = route.params?.openDiscoverPlaceId?.trim();
     if (!id) return;
-    setDiscoverSeedPlaceId(id);
-    setPlaceDiscoverOpen(true);
+    pendingDiscoverPlaceRef.current = id;
     navigation.setParams({ openDiscoverPlaceId: undefined });
   }, [route.params?.openDiscoverPlaceId, navigation]);
+
+  useEffect(() => {
+    const id = pendingDiscoverPlaceRef.current;
+    if (!id || tripCredits == null) return;
+    pendingDiscoverPlaceRef.current = null;
+    if (!canUsePlaceDiscoverFlow(tripCredits, isPro)) {
+      setNoCreditsVariant('discover');
+      setNoCreditsOpen(true);
+      return;
+    }
+    setDiscoverSeedPlaceId(id);
+    setPlaceDiscoverOpen(true);
+  }, [tripCredits, isPro]);
+
+  const handleCreateTrip = useCallback(() => {
+    if (tripCredits != null && !canCreateNewTrip(tripCredits, isPro)) {
+      setNoCreditsVariant('createTrip');
+      setNoCreditsOpen(true);
+      return;
+    }
+    props.onCreateTrip();
+  }, [tripCredits, isPro, props.onCreateTrip]);
 
   useEffect(() => {
     const unsub = subscribeHomeScreenCopy(setHomeCopy);
@@ -620,7 +657,13 @@ export function HomeScreen(props: {
   }, [emptyEmojiScale, loading, trips.length]);
 
   return (
-    <Screen>
+    <Screen safeAreaEdges={['left', 'right', 'bottom']} contentTopPadding={0}>
+      <NoTripCreditsModal
+        visible={noCreditsOpen}
+        variant={noCreditsVariant}
+        onClose={() => setNoCreditsOpen(false)}
+        onGoToProfile={goToProfileTab}
+      />
       <LeaveTripConfirmModal
         visible={leaveTripTarget !== null}
         tripTitle={leaveTripTarget?.title ?? ''}
@@ -631,10 +674,12 @@ export function HomeScreen(props: {
         onConfirmLeave={() => void confirmLeaveTripAction()}
       />
       <ScrollView
+        style={styles.tabScrollFill}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
+        <TabRootSafeAreaTop />
         <View style={styles.topBar}>
           <View style={styles.topBarLeft}>
             <AppLogo size={48} />
@@ -719,7 +764,7 @@ export function HomeScreen(props: {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Yeni gezi planı oluştur"
-              onPress={props.onCreateTrip}
+              onPress={handleCreateTrip}
               style={({ pressed }) => [
                 styles.homeCtaPressable,
                 styles.homeCtaPressablePlanShadow,
@@ -747,7 +792,14 @@ export function HomeScreen(props: {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Yeni yer keşfet: yer ara ve sunumla incele"
-              onPress={() => setPlaceDiscoverOpen(true)}
+              onPress={() => {
+                if (tripCredits != null && !canUsePlaceDiscoverFlow(tripCredits, isPro)) {
+                  setNoCreditsVariant('discover');
+                  setNoCreditsOpen(true);
+                  return;
+                }
+                setPlaceDiscoverOpen(true);
+              }}
               style={({ pressed }) => [styles.homeCtaPressable, pressed && styles.homeCtaPressed]}
             >
               <LinearGradient
@@ -775,6 +827,13 @@ export function HomeScreen(props: {
               setDiscoverSeedPlaceId(null);
             }}
             onNavigateCreateTripWithSecondStop={(p) => {
+              if (tripCredits != null && !canCreateNewTrip(tripCredits, isPro)) {
+                setPlaceDiscoverOpen(false);
+                setDiscoverSeedPlaceId(null);
+                setNoCreditsVariant('createTrip');
+                setNoCreditsOpen(true);
+                return;
+              }
               setPlaceDiscoverOpen(false);
               setDiscoverSeedPlaceId(null);
               navigation.navigate('CreateTrip', { secondStopFromDiscover: p });
@@ -1039,10 +1098,18 @@ export function HomeScreen(props: {
 
 function createHomeStyles(theme: AppTheme) {
   return StyleSheet.create({
+    tabScrollFill: {
+      flex: 1,
+      width: '100%',
+      maxWidth: '100%',
+      alignSelf: 'stretch',
+    },
     scrollContent: {
       paddingBottom: theme.space.xxl,
       width: '100%',
       maxWidth: '100%',
+      flexGrow: 1,
+      alignItems: 'stretch',
     },
     topBar: {
       flexDirection: 'row',

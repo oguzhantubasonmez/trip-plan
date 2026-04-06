@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useFocusEffect, useRoute, type RouteProp } from '@react-navigation/native';
+import {
+  useFocusEffect,
+  useNavigation,
+  useRoute,
+  type CompositeNavigationProp,
+  type RouteProp,
+} from '@react-navigation/native';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -11,28 +19,40 @@ import {
 } from 'react-native';
 import { AddPlaceModal } from '../components/AddPlaceModal';
 import { DatePickerField } from '../components/DatePickerField';
+import { NoTripCreditsModal } from '../components/NoTripCreditsModal';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
 import { TextField } from '../components/TextField';
 import { TimePickerField } from '../components/TimePickerField';
+import { useProEntitlement } from '../hooks/useProEntitlement';
+import { useTripCreationCredits } from '../hooks/useTripCreationCredits';
 import { auth } from '../lib/firebase';
-import type { HomeStackParamList } from '../navigation/types';
+import { runPostTripCreationAdFlow } from '../lib/postTripCreationAdFlow';
+import type { HomeStackParamList, MainTabParamList } from '../navigation/types';
 import {
+  canCreateNewTrip,
   consumeTripCreationCredit,
-  effectiveTripCreationCredits,
   NoTripCreationCreditsError,
 } from '../services/tripCreationCredits';
-import { getUserProfile } from '../services/userProfile';
 import { addStop, createTrip } from '../services/trips';
 import type { PlacesSearchMode } from '../services/places';
 import { useAppTheme } from '../ThemeContext';
 import type { AppTheme } from '../theme';
 import { normalizePlanTime } from '../utils/planTime';
 
+type CreateTripNav = CompositeNavigationProp<
+  NativeStackNavigationProp<HomeStackParamList, 'CreateTrip'>,
+  BottomTabNavigationProp<MainTabParamList>
+>;
+
 export function CreateTripScreen(props: {
   onCreated: (tripId: string, opts?: { skipAddPlaceModal?: boolean }) => void;
   onBack: () => void;
 }) {
+  const navigation = useNavigation<CreateTripNav>();
+  const goToProfileTab = useCallback(() => {
+    navigation.navigate('ProfileTab', { screen: 'Profile' });
+  }, [navigation]);
   const route = useRoute<RouteProp<HomeStackParamList, 'CreateTrip'>>();
   const [secondStopFromDiscover, setSecondStopFromDiscover] = useState(
     () => route.params?.secondStopFromDiscover ?? null
@@ -60,17 +80,18 @@ export function CreateTripScreen(props: {
   } | null>(null);
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
-  const [creditsHint, setCreditsHint] = useState<number | null>(null);
+  const tripCredits = useTripCreationCredits();
+  const { isPro } = useProEntitlement();
+  const [noCreditsOpen, setNoCreditsOpen] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
       const uid = auth.currentUser?.uid;
-      if (!uid) {
-        setCreditsHint(null);
-        return;
+      if (!uid || tripCredits == null) return;
+      if (!canCreateNewTrip(tripCredits, isPro)) {
+        setNoCreditsOpen(true);
       }
-      void getUserProfile(uid).then((p) => setCreditsHint(effectiveTripCreationCredits(p)));
-    }, [])
+    }, [tripCredits, isPro])
   );
 
   function toISODate(d: Date) {
@@ -124,11 +145,8 @@ export function CreateTripScreen(props: {
       setError('Oturum bulunamadı.');
       return;
     }
-    const profileCheck = await getUserProfile(uid);
-    if (effectiveTripCreationCredits(profileCheck) < 1) {
-      setError(
-        'Rota oluşturma hakkın kalmadı. Ana sekmelerin üstündeki alandan «Reklam izle · +1 hak» ile hak kazanabilirsin.'
-      );
+    if (!canCreateNewTrip(tripCredits, isPro)) {
+      setNoCreditsOpen(true);
       return;
     }
     setLoading(true);
@@ -178,13 +196,15 @@ export function CreateTripScreen(props: {
             : {}),
         });
       }
-      try {
-        await consumeTripCreationCredit(uid);
-        setCreditsHint((c) => (c != null ? Math.max(0, c - 1) : c));
-      } catch (ce: unknown) {
-        if (!(ce instanceof NoTripCreationCreditsError)) {
-          /* nadir yarış; rota zaten oluştu */
+      if (!isPro) {
+        try {
+          await consumeTripCreationCredit(uid);
+        } catch (ce: unknown) {
+          if (!(ce instanceof NoTripCreationCreditsError)) {
+            /* nadir yarış; rota zaten oluştu */
+          }
         }
+        await runPostTripCreationAdFlow();
       }
       props.onCreated(tripId, { skipAddPlaceModal: !!(firstStop || secondStopFromDiscover) });
     } catch (e: any) {
@@ -196,6 +216,12 @@ export function CreateTripScreen(props: {
 
   return (
     <Screen>
+      <NoTripCreditsModal
+        visible={noCreditsOpen}
+        variant="createTrip"
+        onClose={() => setNoCreditsOpen(false)}
+        onGoToProfile={goToProfileTab}
+      />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
@@ -220,14 +246,8 @@ export function CreateTripScreen(props: {
             </Text>
           </View>
 
-          {creditsHint != null && creditsHint < 1 ? (
-            <View style={styles.creditWarn}>
-              <Text style={styles.creditWarnText}>
-                Rota hakkın bitti. Üstteki «Reklam izle · +1 hak» ile devam edebilirsin.
-              </Text>
-            </View>
-          ) : creditsHint != null ? (
-            <Text style={styles.creditOk}>Kalan rota hakkı: {creditsHint}</Text>
+          {tripCredits != null ? (
+            <Text style={styles.creditOk}>Kalan rota hakkı: {tripCredits}</Text>
           ) : null}
 
           <View style={styles.card}>
@@ -321,7 +341,7 @@ export function CreateTripScreen(props: {
             title="🚀 Planı oluştur"
             onPress={submit}
             loading={loading}
-            disabled={creditsHint != null && creditsHint < 1}
+            disabled={tripCredits != null && !canCreateNewTrip(tripCredits, isPro)}
           />
           </View>
         </ScrollView>
@@ -351,15 +371,6 @@ function createCreateTripStyles(t: AppTheme) {
     header: { gap: 8, marginBottom: t.space.lg, alignItems: 'center' },
     heroEmoji: { fontSize: 44, marginBottom: 4 },
     title: { color: t.color.text, fontSize: t.font.hero, fontWeight: '900', textAlign: 'center' },
-    creditWarn: {
-      marginBottom: t.space.md,
-      padding: t.space.md,
-      borderRadius: t.radius.lg,
-      backgroundColor: 'rgba(239, 68, 68, 0.12)',
-      borderWidth: 1,
-      borderColor: t.color.danger,
-    },
-    creditWarnText: { color: t.color.danger, fontSize: t.font.small, fontWeight: '700', lineHeight: 20 },
     creditOk: {
       marginBottom: t.space.sm,
       textAlign: 'center',

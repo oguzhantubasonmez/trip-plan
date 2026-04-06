@@ -1,22 +1,37 @@
-import { useFocusEffect } from '@react-navigation/native';
+import {
+  useFocusEffect,
+  useNavigation,
+  type CompositeNavigationProp,
+} from '@react-navigation/native';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useCallback, useMemo, useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { DatePickerField } from '../components/DatePickerField';
+import { NoTripCreditsModal } from '../components/NoTripCreditsModal';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
 import { TextField } from '../components/TextField';
 import { TimePickerField } from '../components/TimePickerField';
+import { useProEntitlement } from '../hooks/useProEntitlement';
+import { useTripCreationCredits } from '../hooks/useTripCreationCredits';
 import { auth } from '../lib/firebase';
+import { runPostTripCreationAdFlow } from '../lib/postTripCreationAdFlow';
 import {
+  canCreateNewTrip,
   consumeTripCreationCredit,
-  effectiveTripCreationCredits,
   NoTripCreationCreditsError,
 } from '../services/tripCreationCredits';
-import { getUserProfile } from '../services/userProfile';
+import type { HomeStackParamList, MainTabParamList } from '../navigation/types';
 import { copyTripWithNewSchedule, getTrip } from '../services/trips';
 import { useAppTheme } from '../ThemeContext';
 import type { AppTheme } from '../theme';
 import { normalizePlanTime } from '../utils/planTime';
+
+type CopyTripNav = CompositeNavigationProp<
+  NativeStackNavigationProp<HomeStackParamList, 'CopyTrip'>,
+  BottomTabNavigationProp<MainTabParamList>
+>;
 
 function parseISODate(s: string): Date | null {
   if (!s) return null;
@@ -29,6 +44,10 @@ export function CopyTripScreen(props: {
   onCreated: (tripId: string) => void;
   onBack: () => void;
 }) {
+  const navigation = useNavigation<CopyTripNav>();
+  const goToProfileTab = useCallback(() => {
+    navigation.navigate('ProfileTab', { screen: 'Profile' });
+  }, [navigation]);
   const appTheme = useAppTheme();
   const styles = useMemo(() => createCopyTripStyles(appTheme), [appTheme]);
   const [title, setTitle] = useState('');
@@ -39,17 +58,18 @@ export function CopyTripScreen(props: {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | undefined>();
-  const [creditsHint, setCreditsHint] = useState<number | null>(null);
+  const tripCredits = useTripCreationCredits();
+  const { isPro } = useProEntitlement();
+  const [noCreditsOpen, setNoCreditsOpen] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
       const uid = auth.currentUser?.uid;
-      if (!uid) {
-        setCreditsHint(null);
-        return;
+      if (!uid || tripCredits == null) return;
+      if (!canCreateNewTrip(tripCredits, isPro)) {
+        setNoCreditsOpen(true);
       }
-      void getUserProfile(uid).then((p) => setCreditsHint(effectiveTripCreationCredits(p)));
-    }, [])
+    }, [tripCredits, isPro])
   );
 
   const load = useCallback(async () => {
@@ -117,11 +137,8 @@ export function CopyTripScreen(props: {
       setError('Oturum bulunamadı.');
       return;
     }
-    const profileCheck = await getUserProfile(uid);
-    if (effectiveTripCreationCredits(profileCheck) < 1) {
-      setError(
-        'Rota oluşturma hakkın kalmadı. Ana sekmelerin üstündeki alandan «Reklam izle · +1 hak» ile hak kazanabilirsin.'
-      );
+    if (!canCreateNewTrip(tripCredits, isPro)) {
+      setNoCreditsOpen(true);
       return;
     }
     setSaving(true);
@@ -135,13 +152,15 @@ export function CopyTripScreen(props: {
         startTime: st,
         endTime: et,
       });
-      try {
-        await consumeTripCreationCredit(uid);
-        setCreditsHint((c) => (c != null ? Math.max(0, c - 1) : c));
-      } catch (ce: unknown) {
-        if (!(ce instanceof NoTripCreationCreditsError)) {
-          /* */
+      if (!isPro) {
+        try {
+          await consumeTripCreationCredit(uid);
+        } catch (ce: unknown) {
+          if (!(ce instanceof NoTripCreationCreditsError)) {
+            /* */
+          }
         }
+        await runPostTripCreationAdFlow();
       }
       props.onCreated(newId);
     } catch (e: any) {
@@ -154,6 +173,12 @@ export function CopyTripScreen(props: {
   if (loading) {
     return (
       <Screen>
+        <NoTripCreditsModal
+          visible={noCreditsOpen}
+          variant="copyTrip"
+          onClose={() => setNoCreditsOpen(false)}
+          onGoToProfile={goToProfileTab}
+        />
         <View style={styles.centered}>
           <Text style={styles.muted}>Yükleniyor...</Text>
         </View>
@@ -163,6 +188,12 @@ export function CopyTripScreen(props: {
 
   return (
     <Screen>
+      <NoTripCreditsModal
+        visible={noCreditsOpen}
+        variant="copyTrip"
+        onClose={() => setNoCreditsOpen(false)}
+        onGoToProfile={goToProfileTab}
+      />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <Pressable onPress={props.onBack} style={styles.backRow}>
           <Text style={styles.backText}>← Geri</Text>
@@ -173,14 +204,8 @@ export function CopyTripScreen(props: {
           kayar. Yeni rotada yalnızca sensin (admin); katılımcıları tekrar ekleyebilirsin.
         </Text>
 
-        {creditsHint != null && creditsHint < 1 ? (
-          <View style={styles.creditWarn}>
-            <Text style={styles.creditWarnText}>
-              Rota hakkın bitti. Üstteki «Reklam izle · +1 hak» ile devam edebilirsin.
-            </Text>
-          </View>
-        ) : creditsHint != null ? (
-          <Text style={styles.creditOk}>Kalan rota hakkı: {creditsHint}</Text>
+        {!isPro ? (
+          <Text style={styles.profileHint}>Rota hakkını ve ödüllü reklamı Profil sekmesinden yönetirsin.</Text>
         ) : null}
 
         <View style={{ height: appTheme.space.md }} />
@@ -219,7 +244,7 @@ export function CopyTripScreen(props: {
           title="Kopyayı oluştur"
           onPress={() => void submit()}
           loading={saving}
-          disabled={creditsHint != null && creditsHint < 1}
+          disabled={tripCredits != null && !canCreateNewTrip(tripCredits, isPro)}
         />
       </KeyboardAvoidingView>
     </Screen>
@@ -232,20 +257,12 @@ function createCopyTripStyles(t: AppTheme) {
     backText: { color: t.color.primary, fontSize: t.font.body, fontWeight: '700' },
     screenTitle: { color: t.color.text, fontSize: t.font.h1, fontWeight: '900' },
     hint: { color: t.color.muted, fontSize: t.font.small, marginTop: 4, lineHeight: 20 },
-    creditWarn: {
-      marginTop: t.space.md,
-      padding: t.space.md,
-      borderRadius: t.radius.lg,
-      backgroundColor: 'rgba(239, 68, 68, 0.12)',
-      borderWidth: 1,
-      borderColor: t.color.danger,
-    },
-    creditWarnText: { color: t.color.danger, fontSize: t.font.small, fontWeight: '700', lineHeight: 20 },
-    creditOk: {
+    profileHint: {
       marginTop: t.space.sm,
-      color: t.color.primaryDark,
-      fontSize: t.font.small,
-      fontWeight: '800',
+      color: t.color.muted,
+      fontSize: t.font.tiny,
+      lineHeight: 18,
+      fontWeight: '600',
     },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     muted: { color: t.color.muted, fontSize: t.font.body },

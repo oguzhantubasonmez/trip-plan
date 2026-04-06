@@ -17,6 +17,8 @@ export type HomeStackParamList = {
   TripDetail: { tripId: string; openAddPlace?: boolean; focusComments?: boolean };
   /** Uygulama içi rota sunumu — önce rota özeti, sonra duraklar; initialIndex 0 tabanlı durak (ilk durak 0) */
   TripPresentation: { tripId: string; initialIndex?: number };
+  /** Durak bölgelerine göre restoran / otel / aktivite önerileri */
+  TripStopsDiscover: { tripId: string };
   CopyTrip: { sourceTripId: string };
   EditTrip: { tripId: string };
   FriendsHub: undefined;

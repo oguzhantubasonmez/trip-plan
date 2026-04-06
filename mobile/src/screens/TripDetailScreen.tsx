@@ -100,6 +100,7 @@ import {
   triggerBrowserFileDownload,
 } from '../utils/planSummaryExport';
 import { buildPlanSummaryPresentationHtmlAsync } from '../utils/planSummaryPresentationHtml';
+import { useProEntitlement } from '../hooks/useProEntitlement';
 
 const RSVP_LABELS: Record<string, string> = {
   going: 'Katılıyorum',
@@ -217,6 +218,21 @@ export function TripDetailScreen(props: {
     return pairs[i % pairs.length];
   }
   const navigation = useNavigation<NativeStackNavigationProp<HomeStackParamList>>();
+  const { isPro } = useProEntitlement();
+  const openProUpsell = useCallback(() => {
+    Alert.alert(
+      'RouteWise Pro',
+      'Sınırsız rota, gelişmiş planlama (plan dışa aktarma ve duraklar arası mesafe/süre güncelleme) ve reklamsız deneyim için Pro’ya geçin. Profil sekmesinden abonelik sayfasını açabilirsiniz.',
+      [
+        { text: 'Tamam', style: 'cancel' },
+        {
+          text: 'Profil',
+          onPress: () =>
+            navigation.getParent()?.navigate('ProfileTab', { screen: 'Profile' }),
+        },
+      ]
+    );
+  }, [navigation]);
 
   const stopWeatherDeps = useMemo(
     () =>
@@ -889,6 +905,10 @@ export function TripDetailScreen(props: {
   }
 
   async function handleRecalculateLegs() {
+    if (!isPro) {
+      openProUpsell();
+      return;
+    }
     setRecalculatingLegs(true);
     setError(null);
     try {
@@ -1041,6 +1061,10 @@ export function TripDetailScreen(props: {
   async function handleExportPlanCsv() {
     const t = trip;
     if (!t) return;
+    if (!isPro) {
+      openProUpsell();
+      return;
+    }
     setPlanExportBusy(true);
     setError(null);
     try {
@@ -1075,6 +1099,10 @@ export function TripDetailScreen(props: {
   async function runPlanHtmlExport() {
     const t = trip;
     if (!t) return;
+    if (!isPro) {
+      openProUpsell();
+      return;
+    }
     setPlanExportBusy(true);
     setPlanHtmlProgress('Özet ve durak içerikleri hazırlanıyor (paralel, birkaç durak genelde 30 sn içinde)…');
     setError(null);
@@ -1402,12 +1430,37 @@ export function TripDetailScreen(props: {
             <View style={styles.tripHeaderActionsRow}>
               <Pressable
                 onPress={() => navigation.navigate('TripPresentation', { tripId: props.tripId })}
-                style={({ pressed }) => [styles.copyTripBtn, pressed && { opacity: 0.88 }]}
+                style={({ pressed }) => [styles.presentationBtnOuter, pressed && { opacity: 0.92 }]}
                 accessibilityRole="button"
                 accessibilityLabel="Rota sunumunu tam ekran aç; durakları yatay kaydırarak gez"
               >
-                <Ionicons name="easel-outline" size={18} color={appTheme.color.primaryDark} />
-                <Text style={styles.copyTripBtnLabel}>Rota Sunumu</Text>
+                <LinearGradient
+                  colors={['#0369A1', '#0E7490', '#0F766E']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.presentationBtnGradient}
+                >
+                  <Ionicons name="easel" size={18} color="#FFFFFF" />
+                  <Text style={styles.presentationBtnLabel}>Rota Sunumu</Text>
+                  <Ionicons name="images-outline" size={16} color="rgba(255,255,255,0.95)" />
+                </LinearGradient>
+              </Pressable>
+              <Pressable
+                onPress={() => navigation.navigate('TripStopsDiscover', { tripId: props.tripId })}
+                style={({ pressed }) => [styles.discoverStopsBtnOuter, pressed && { opacity: 0.92 }]}
+                accessibilityRole="button"
+                accessibilityLabel="Durakları keşfet: bölgeye göre restoran, otel ve aktivite önerileri"
+              >
+                <LinearGradient
+                  colors={['#6D28D9', '#DB2777', '#EA580C']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.discoverStopsBtnGradient}
+                >
+                  <Ionicons name="compass" size={18} color="#FFFFFF" />
+                  <Text style={styles.discoverStopsBtnLabel}>Durakları keşfet</Text>
+                  <Ionicons name="sparkles" size={16} color="rgba(255,255,255,0.95)" />
+                </LinearGradient>
               </Pressable>
             </View>
           ) : null}
@@ -2552,22 +2605,30 @@ function createTripDetailStyles(t: AppTheme) {
       alignItems: 'center',
       marginTop: t.space.sm,
     },
-    copyTripBtn: {
+    presentationBtnOuter: {
       alignSelf: 'center',
+      borderRadius: t.radius.pill,
+      overflow: 'hidden',
+      ...t.shadowSoft,
+    },
+    presentationBtnGradient: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 6,
-      paddingVertical: 8,
-      paddingHorizontal: 14,
+      gap: 8,
+      paddingVertical: 10,
+      paddingHorizontal: 16,
       borderRadius: t.radius.pill,
       borderWidth: 1,
-      borderColor: t.color.primary,
-      backgroundColor: t.color.primarySoft,
+      borderColor: 'rgba(255,255,255,0.4)',
     },
-    copyTripBtnLabel: {
-      color: t.color.primaryDark,
+    presentationBtnLabel: {
+      color: '#FFFFFF',
       fontSize: t.font.small,
-      fontWeight: '800',
+      fontWeight: '900',
+      letterSpacing: 0.2,
+      textShadowColor: 'rgba(0,0,0,0.2)',
+      textShadowOffset: { width: 0, height: 1 },
+      textShadowRadius: 2,
     },
     tripHeaderActionsRow: {
       marginTop: t.space.sm,
@@ -2577,6 +2638,30 @@ function createTripDetailStyles(t: AppTheme) {
       justifyContent: 'center',
       gap: 10,
       alignSelf: 'stretch',
+    },
+    discoverStopsBtnOuter: {
+      borderRadius: t.radius.pill,
+      overflow: 'hidden',
+      ...t.shadowSoft,
+    },
+    discoverStopsBtnGradient: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingVertical: 10,
+      paddingHorizontal: 16,
+      borderRadius: t.radius.pill,
+      borderWidth: 1,
+      borderColor: 'rgba(255,255,255,0.35)',
+    },
+    discoverStopsBtnLabel: {
+      color: '#FFFFFF',
+      fontSize: t.font.small,
+      fontWeight: '900',
+      letterSpacing: 0.2,
+      textShadowColor: 'rgba(0,0,0,0.25)',
+      textShadowOffset: { width: 0, height: 1 },
+      textShadowRadius: 2,
     },
     tripHeaderGearBtn: {
       width: 44,

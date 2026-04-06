@@ -5,8 +5,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useEffect } from 'react';
 import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BottomAdBanner } from '../components/BottomAdBanner';
-import { TripCreditsHeader } from '../components/TripCreditsHeader';
 import { getGoogleMobileAdsModule } from '../lib/mobileAds';
 import { DiscoverScreen } from '../screens/DiscoverScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
@@ -96,55 +94,51 @@ export function MainTabNavigator() {
   }, []);
 
   return (
-    <View style={{ flex: 1 }}>
-      <TripCreditsHeader />
-      <View style={{ flex: 1, minHeight: 0 }}>
+    <View style={{ flex: 1, width: '100%', maxWidth: '100%', alignSelf: 'stretch' }}>
       <Tab.Navigator
-      initialRouteName="HomeTab"
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: theme.color.primaryDark,
-        tabBarInactiveTintColor: theme.color.muted,
-        tabBarStyle: {
-          backgroundColor: theme.color.surface,
-          borderTopColor: theme.color.border,
-          paddingTop: 6,
-          paddingBottom: tabBarPadBottom,
-          height: 48 + tabBarPadBottom,
-        },
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '700' },
-      }}
-    >
-      <Tab.Screen
-        name="HomeTab"
-        options={{
-          title: 'Ana sayfa',
-          tabBarIcon: ({ color, size }) => <Ionicons name="home" color={color} size={size} />,
+        initialRouteName="HomeTab"
+        screenOptions={{
+          headerShown: false,
+          tabBarActiveTintColor: theme.color.primaryDark,
+          tabBarInactiveTintColor: theme.color.muted,
+          tabBarStyle: {
+            backgroundColor: theme.color.surface,
+            borderTopColor: theme.color.border,
+            paddingTop: 6,
+            paddingBottom: tabBarPadBottom,
+            height: 48 + tabBarPadBottom,
+          },
+          tabBarLabelStyle: { fontSize: 11, fontWeight: '700' },
         }}
       >
-        {() => <HomeStackNavigator />}
-      </Tab.Screen>
-      <Tab.Screen
-        name="DiscoverTab"
-        options={{
-          title: 'Keşfet',
-          tabBarIcon: ({ color, size }) => <Ionicons name="rocket" color={color} size={size} />,
-        }}
-      >
-        {({ navigation }) => <DiscoverStackNavigator tabNavigation={navigation} />}
-      </Tab.Screen>
-      <Tab.Screen
-        name="ProfileTab"
-        options={{
-          title: 'Profil',
-          tabBarIcon: ({ color, size }) => <Ionicons name="person" color={color} size={size} />,
-        }}
-      >
-        {({ navigation }) => <ProfileStackNavigator tabNavigation={navigation} />}
-      </Tab.Screen>
-    </Tab.Navigator>
-      </View>
-    <BottomAdBanner />
+        <Tab.Screen
+          name="HomeTab"
+          options={{
+            title: 'Ana sayfa',
+            tabBarIcon: ({ color, size }) => <Ionicons name="home" color={color} size={size} />,
+          }}
+        >
+          {() => <HomeStackNavigator />}
+        </Tab.Screen>
+        <Tab.Screen
+          name="DiscoverTab"
+          options={{
+            title: 'Keşfet',
+            tabBarIcon: ({ color, size }) => <Ionicons name="rocket" color={color} size={size} />,
+          }}
+        >
+          {({ navigation }) => <DiscoverStackNavigator tabNavigation={navigation} />}
+        </Tab.Screen>
+        <Tab.Screen
+          name="ProfileTab"
+          options={{
+            title: 'Profil',
+            tabBarIcon: ({ color, size }) => <Ionicons name="person" color={color} size={size} />,
+          }}
+        >
+          {({ navigation }) => <ProfileStackNavigator tabNavigation={navigation} />}
+        </Tab.Screen>
+      </Tab.Navigator>
     </View>
   );
 }

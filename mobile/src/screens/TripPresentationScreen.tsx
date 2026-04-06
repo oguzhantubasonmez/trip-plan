@@ -720,7 +720,10 @@ export function TripPresentationScreen(props: {
     [trip, pages]
   );
 
-  const introRouteMapUri = useMemo(() => routeOverviewStaticMapUrl(routeOrderedStops, 640, 320), [routeOrderedStops]);
+  const introRouteMapUri = useMemo(
+    () => routeOverviewStaticMapUrl(routeOrderedStops, 640, 320, { preferOsmTiles: true }),
+    [routeOrderedStops]
+  );
 
   const introRouteMapFallbackUri = useMemo(() => {
     const s = routeOrderedStops.find(

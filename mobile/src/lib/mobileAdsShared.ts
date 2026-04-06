@@ -8,7 +8,10 @@ export type GoogleMobileAdsModule = {
     size: string;
     requestOptions?: { requestNonPersonalizedAdsOnly?: boolean };
   }>;
-  BannerAdSize: { ANCHORED_ADAPTIVE_BANNER: string };
+  BannerAdSize: {
+    ANCHORED_ADAPTIVE_BANNER: string;
+    INLINE_ADAPTIVE_BANNER: string;
+  };
   TestIds: { BANNER: string; ADAPTIVE_BANNER: string; REWARDED: string };
   RewardedAd: {
     createForAdRequest: (

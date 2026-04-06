@@ -1,10 +1,12 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useMemo, useState } from 'react';
 import { signOut } from 'firebase/auth';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { CollapsibleSection } from '../components/CollapsibleSection';
 import { PrimaryButton } from '../components/PrimaryButton';
+import { ProComingSoonModal } from '../components/ProComingSoonModal';
 import { Screen } from '../components/Screen';
+import { TabRootScrollChromeBottom, TabRootScrollChromeTop } from '../components/TabRootScrollChrome';
 import { TextField } from '../components/TextField';
 import { auth } from '../lib/firebase';
 import { getUserTripAggregateStats, type UserTripAggregateStats } from '../services/trips';
@@ -16,6 +18,9 @@ import {
 } from '../services/userProfile';
 import { useAppTheme, useThemeMode, type ThemeMode } from '../ThemeContext';
 import type { AppTheme } from '../theme';
+import { getProSubscriptionUrl } from '../constants/monetization';
+import { useProEntitlement } from '../hooks/useProEntitlement';
+import { setProEntitlementDev } from '../services/proEntitlement';
 import { nationalDigitsAfterTrCountry, normalizeE164 } from '../utils/phone';
 
 export function ProfileScreen(props: {
@@ -30,6 +35,7 @@ export function ProfileScreen(props: {
   const { mode, setMode } = useThemeMode();
   const styles = useMemo(() => createProfileStyles(theme), [theme]);
   const uid = auth.currentUser?.uid;
+  const { isPro } = useProEntitlement();
   const authEmail = auth.currentUser?.email ?? '';
   const [countryCode] = useState('+90');
   const [displayName, setDisplayName] = useState('');
@@ -47,6 +53,7 @@ export function ProfileScreen(props: {
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
   const [savedPlaces, setSavedPlaces] = useState<SavedPlaceEntry[]>([]);
+  const [proComingSoonOpen, setProComingSoonOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!uid) return;
@@ -190,7 +197,10 @@ export function ProfileScreen(props: {
   }, [savedPlaces.length]);
 
   return (
-    <Screen>
+    <Screen
+      safeAreaEdges={props.variant === 'tab' ? ['left', 'right', 'bottom'] : undefined}
+      contentTopPadding={props.variant === 'tab' ? 0 : undefined}
+    >
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
@@ -198,6 +208,7 @@ export function ProfileScreen(props: {
         showsVerticalScrollIndicator={false}
         showsHorizontalScrollIndicator={false}
       >
+      {props.variant === 'tab' ? <TabRootScrollChromeTop showBannerAds={!isPro} /> : null}
       {props.variant !== 'tab' && props.onBack ? (
         <Pressable onPress={props.onBack} style={styles.backRow}>
           <Text style={styles.backText}>← Geri</Text>
@@ -210,6 +221,48 @@ export function ProfileScreen(props: {
           Telefon rehber eşleşmesi için. Araç tüketimi, araç ismi ve yakıt fiyatı rota detayındaki «Araç ve yakıt»
           bölümüne varsayılan olarak düşer; her rotada farklı değer girebilirsin.
         </Text>
+      </View>
+
+      <View
+        style={[
+          styles.card,
+          styles.sectionGap,
+          isPro ? { borderColor: theme.color.primary, borderWidth: 1.5 } : null,
+        ]}
+      >
+        <Text style={styles.proHeading}>RouteWise Pro</Text>
+        <Text style={styles.blockSub}>
+          {isPro
+            ? 'Aktif: sınırsız rota, gelişmiş planlama ve reklamsız deneyim.'
+            : 'Sınırsız rota oluşturma, gelişmiş planlama (dışa aktarma, duraklar arası mesafe güncelleme) ve reklam kaldırma.'}
+        </Text>
+        <View style={{ height: theme.space.md }} />
+        {!isPro ? (
+          <PrimaryButton
+            title="Pro ol — abonelik / satın alma"
+            onPress={() => {
+              const url = getProSubscriptionUrl().trim();
+              if (!url) {
+                setProComingSoonOpen(true);
+                return;
+              }
+              void Linking.openURL(url);
+            }}
+          />
+        ) : null}
+        {__DEV__ && uid ? (
+          <>
+            <View style={{ height: theme.space.sm }} />
+            <Pressable
+              onPress={() => void setProEntitlementDev(uid, !isPro)}
+              style={styles.devProToggle}
+            >
+              <Text style={styles.devProToggleText}>
+                [Geliştirici] Pro {isPro ? 'kapat' : 'aç'} (Firestore)
+              </Text>
+            </Pressable>
+          </>
+        ) : null}
       </View>
 
       <CollapsibleSection
@@ -499,7 +552,9 @@ export function ProfileScreen(props: {
           <Text style={styles.signOutText}>Çıkış yap</Text>
         </Pressable>
       </CollapsibleSection>
+      {props.variant === 'tab' ? <TabRootScrollChromeBottom showBannerAds={!isPro} /> : null}
       </ScrollView>
+      <ProComingSoonModal visible={proComingSoonOpen} onClose={() => setProComingSoonOpen(false)} />
     </Screen>
   );
 }
@@ -515,10 +570,13 @@ function formatAggregateDrivingDuration(totalMin: number): string {
 
 function createProfileStyles(theme: AppTheme) {
   return StyleSheet.create({
-    scroll: { flex: 1 },
+    scroll: { flex: 1, width: '100%', maxWidth: '100%', alignSelf: 'stretch' },
     scrollContent: {
       flexGrow: 1,
       paddingBottom: theme.space.xl * 2,
+      width: '100%',
+      maxWidth: '100%',
+      alignItems: 'stretch',
     },
     backRow: { alignSelf: 'flex-start', paddingVertical: 4, paddingRight: 8, marginBottom: theme.space.sm },
     backText: { color: theme.color.primaryDark, fontSize: theme.font.body, fontWeight: '800' },
@@ -532,6 +590,9 @@ function createProfileStyles(theme: AppTheme) {
       textAlign: 'center',
       paddingHorizontal: theme.space.sm,
     },
+    proHeading: { color: theme.color.text, fontSize: theme.font.h2, fontWeight: '900', marginBottom: 4 },
+    devProToggle: { alignSelf: 'flex-start', paddingVertical: 8 },
+    devProToggleText: { color: theme.color.muted, fontSize: theme.font.tiny, fontWeight: '700' },
     sectionGap: { marginBottom: theme.space.md },
     card: {
       backgroundColor: theme.color.surface,

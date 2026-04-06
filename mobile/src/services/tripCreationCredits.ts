@@ -18,6 +18,21 @@ export function effectiveTripCreationCredits(profile: { tripCreationCredits?: nu
   return DEFAULT_TRIP_CREATION_CREDITS;
 }
 
+/** Yeni rota / kopya oluşturma (en az 1 hak). Pro → sınırsız. */
+export function canCreateNewTrip(credits: number | null | undefined, isPro = false): boolean {
+  if (isPro) return true;
+  return credits != null && credits >= 1;
+}
+
+/**
+ * Yer keşfet akışı (PlaceDiscoverModal): en az 2 hak gerekir (>1).
+ * Pro → sınırsız (keşif her zaman açık).
+ */
+export function canUsePlaceDiscoverFlow(credits: number | null | undefined, isPro = false): boolean {
+  if (isPro) return true;
+  return credits != null && credits > 1;
+}
+
 /**
  * Eski hesaplarda alan yoksa bir kez 3 yazar (Firestore’da sabitlenir).
  * Oturum açılınca App’ten çağrılır.

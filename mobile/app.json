@@ -12,7 +12,10 @@
       "backgroundColor": "#0B1220"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "LSApplicationQueriesSchemes": ["comgooglemaps"]
+      }
     },
     "android": {
       "package": "com.routewise.tripplan",
@@ -40,7 +43,9 @@
     "extra": {
       "eas": {
         "projectId": "fcea9ac0-9ed8-4a28-9a50-dd0810f6fcf3"
-      }
+      },
+      "inviteWebBaseUrl": "",
+      "proSubscriptionUrl": ""
     }
   }
 }

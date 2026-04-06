@@ -10,6 +10,7 @@ import { GroupsScreen } from '../screens/GroupsScreen';
 import { HomeScreen } from '../screens/HomeScreen';
 import { TripDetailScreen } from '../screens/TripDetailScreen';
 import { TripPresentationScreen } from '../screens/TripPresentationScreen';
+import { TripStopsDiscoverScreen } from '../screens/TripStopsDiscoverScreen';
 import { WeatherForecastScreen } from '../screens/WeatherForecastScreen';
 import type { HomeStackParamList } from './types';
 
@@ -73,6 +74,17 @@ export function HomeStackNavigator() {
             tripId={route.params.tripId}
             initialIndex={route.params.initialIndex}
             onBack={() => navigation.goBack()}
+          />
+        )}
+      </Stack.Screen>
+      <Stack.Screen name="TripStopsDiscover">
+        {({ route, navigation }) => (
+          <TripStopsDiscoverScreen
+            tripId={route.params.tripId}
+            onBack={() => navigation.goBack()}
+            onAfterStopAdded={() =>
+              navigation.navigate('TripDetail', { tripId: route.params.tripId })
+            }
           />
         )}
       </Stack.Screen>

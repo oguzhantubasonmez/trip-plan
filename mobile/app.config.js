@@ -1,5 +1,8 @@
 const base = require('./app.json');
 
+const inviteWebBaseFromJson = String(base.expo?.extra?.inviteWebBaseUrl ?? '').trim();
+const proSubscriptionFromJson = String(base.expo?.extra?.proSubscriptionUrl ?? '').trim();
+
 /** EAS / lokal prebuild sırasında dolu olmalı; boş anahtarla karolar yüklenmez (siyah harita + Google logosu). */
 const googleMapsApiKey =
   process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ||
@@ -58,8 +61,15 @@ module.exports = {
       ...(base.expo.extra || {}),
       googleMapsApiKey,
       firebaseConfig,
-      /** WhatsApp vb. için tıklanabilir https davet adresi (ör. GitHub Pages’e yüklenen invite-redirect.example.html). */
-      inviteWebBaseUrl: process.env.EXPO_PUBLIC_INVITE_WEB_URL || '',
+      /**
+       * WhatsApp / SMS: tıklanabilir https davet (invite-redirect sayfası + ?invite=).
+       * Öncelik: EXPO_PUBLIC_INVITE_WEB_URL → app.json extra.inviteWebBaseUrl (Git’e sabit URL koymak için).
+       */
+      inviteWebBaseUrl:
+        String(process.env.EXPO_PUBLIC_INVITE_WEB_URL || '').trim() || inviteWebBaseFromJson,
+      /** Play / App Store abonelik sayfası (EXPO_PUBLIC_PRO_SUBSCRIPTION_URL veya extra). */
+      proSubscriptionUrl:
+        String(process.env.EXPO_PUBLIC_PRO_SUBSCRIPTION_URL || '').trim() || proSubscriptionFromJson,
     },
     plugins: [
       ...base.expo.plugins,

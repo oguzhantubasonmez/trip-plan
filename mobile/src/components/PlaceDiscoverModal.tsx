@@ -36,7 +36,8 @@ import type { Trip } from '../types/trip';
 import { buildDiscoverSpotlightPayload } from '../utils/discoverSpotlightPayload';
 import { writeSavedPlaceDiscoverCache } from '../utils/savedPlacesDiscoverCache';
 import { fetchPresentationWebForPlaceSpotlight } from '../utils/stopWebEnrichment';
-import { parseTripYmd, sortStopsByRoute } from '../utils/tripSchedule';
+import { eachTripDayYmd, formatTripDayChipTr } from '../utils/tripDayRange';
+import { sortStopsByRoute } from '../utils/tripSchedule';
 import type { StopPresentationPayload } from '../utils/presentationModel';
 import { PresentationStopSlide } from '../screens/TripPresentationScreen';
 
@@ -49,35 +50,9 @@ const DEBOUNCE_MS = 420;
 
 type Phase = 'search' | 'loading' | 'spotlight';
 
-function eachTripDayYmd(startYmd: string, endYmd: string): string[] {
-  const a = parseTripYmd(startYmd);
-  const b = parseTripYmd(endYmd);
-  if (!a || !b) {
-    const s = String(startYmd ?? '').trim();
-    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? [s] : [];
-  }
-  const out: string[] = [];
-  const cur = new Date(a.getFullYear(), a.getMonth(), a.getDate());
-  const end = new Date(b.getFullYear(), b.getMonth(), b.getDate());
-  while (cur <= end) {
-    const y = cur.getFullYear();
-    const m = String(cur.getMonth() + 1).padStart(2, '0');
-    const d = String(cur.getDate()).padStart(2, '0');
-    out.push(`${y}-${m}-${d}`);
-    cur.setDate(cur.getDate() + 1);
-  }
-  return out;
-}
-
 function canUserAddStopToTrip(trip: Trip, uid: string): boolean {
   if (trip.adminId === uid) return true;
   return trip.attendees.some((a) => a.uid === uid && a.role === 'editor');
-}
-
-function formatDayChip(ymd: string): string {
-  const dt = parseTripYmd(ymd);
-  if (!dt) return ymd;
-  return dt.toLocaleDateString('tr-TR', { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
 function buildSecondStopPayload(details: PlaceDetailsType, placeId: string): DiscoverSecondStopPayload {
@@ -528,7 +503,7 @@ export function PlaceDiscoverModal(props: Props) {
                           onPress={() => void confirmAddStopToTrip(pickerTrip, ymd)}
                           style={({ pressed }) => [styles.dayRow, pressed && { opacity: 0.85 }]}
                         >
-                          <Text style={styles.dayRowText}>{formatDayChip(ymd)}</Text>
+                          <Text style={styles.dayRowText}>{formatTripDayChipTr(ymd)}</Text>
                           <Text style={styles.dayRowYmd}>{ymd}</Text>
                         </Pressable>
                       )

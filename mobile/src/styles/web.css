@@ -1,3 +1,52 @@
+/* Tam genişlik: Expo reset #root’a width vermiyor; RN Web kökü dar sütun gibi boyar */
+html {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  min-height: 100%;
+}
+body {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  min-height: 100%;
+  overflow: hidden;
+}
+#root {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 100% !important;
+  min-height: 100vh !important;
+  height: 100% !important;
+  display: flex !important;
+  flex: 1 1 auto !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  box-sizing: border-box;
+}
+/* AppRegistry → AppContainer → uygulama: yatayda taşma yok, tam genişlik */
+#root > div {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0;
+  flex: 1 1 auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  box-sizing: border-box;
+}
+/* RN Web bazen iki katman div kullanır; ikincisi dar kalmasın */
+#root > div > div {
+  width: 100% !important;
+  max-width: 100% !important;
+  flex: 1 1 auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
 /* Rota detay vb.: RN Web ScrollView — dikey scrollbar görünmez (kaydırma çalışır) */
 #rw-scroll-trip-detail {
   scrollbar-width: none;

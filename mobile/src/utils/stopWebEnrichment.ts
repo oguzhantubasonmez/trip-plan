@@ -413,12 +413,22 @@ function zoomHeuristicForSpan(maxLatSpan: number, maxLngSpan: number, refLat: nu
 /**
  * Rota detayındaki haritadaki hat ile uyumlu **görsel özet**: duraklar sırasıyla bir polyline.
  * Google anahtarı varsa Static Maps API; yoksa OSM.fr ile işaretçiler + merkez/zoom.
+ * `preferOsmTiles`: dışa aktarılan HTML / img yüklemelerinde Google kısıtlarından kaçınmak için yalnızca OSM.
  * (Native haritadaki gerçek sürüş polyline’ı değil; duraklar arası doğrusal hat.)
  */
+export type RouteOverviewStaticMapOptions = {
+  /**
+   * true: Google Static Maps kullanılmaz; OSM tabanlı URL (HTML dışa aktarım, WebView, img etiketi).
+   * Android’de API anahtarı “uygulama kısıtlı” iken img/WebView isteği reddedilebiliyor; bu mod daha güvenilir.
+   */
+  preferOsmTiles?: boolean;
+};
+
 export function routeOverviewStaticMapUrl(
   stops: Stop[],
   width = 640,
-  height = 320
+  height = 320,
+  options?: RouteOverviewStaticMapOptions
 ): string | undefined {
   const coords = [...stops]
     .filter(
@@ -436,7 +446,9 @@ export function routeOverviewStaticMapUrl(
   const h = Math.min(Math.max(80, Math.round(height)), 640);
 
   if (coords.length === 1) {
-    return staticMapPreviewUrl(coords[0]!.lat, coords[0]!.lng, w, h);
+    return options?.preferOsmTiles
+      ? staticMapPreviewUrlFallback(coords[0]!.lat, coords[0]!.lng, w, h)
+      : staticMapPreviewUrl(coords[0]!.lat, coords[0]!.lng, w, h);
   }
 
   let pathCoords = coords;
@@ -445,7 +457,7 @@ export function routeOverviewStaticMapUrl(
     pathCoords = pathCoords.filter((_, i) => i % step === 0 || i === pathCoords.length - 1);
   }
 
-  const key = getGoogleMapsApiKey();
+  const key = options?.preferOsmTiles ? '' : getGoogleMapsApiKey();
   if (key) {
     const buildPathStr = (pts: typeof pathCoords) =>
       pts.map((c) => `${c.lat.toFixed(6)},${c.lng.toFixed(6)}`).join('|');

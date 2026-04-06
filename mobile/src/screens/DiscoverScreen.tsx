@@ -1,4 +1,7 @@
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import type { CompositeNavigationProp } from '@react-navigation/native';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -14,6 +17,8 @@ import {
   Text,
   View,
 } from 'react-native';
+import { useProEntitlement } from '../hooks/useProEntitlement';
+import { useTripCreationCredits } from '../hooks/useTripCreationCredits';
 import { auth } from '../lib/firebase';
 import {
   createDiscoverPoll,
@@ -24,10 +29,14 @@ import {
 import { filterMutualFriendUids } from '../services/friends';
 import { getPlaceDetails } from '../services/places';
 import { getUserProfile, removeSavedPlaceForUser, type SavedPlaceEntry } from '../services/userProfile';
+import { NoTripCreditsModal, type NoTripCreditsVariant } from '../components/NoTripCreditsModal';
 import { PlaceDiscoverModal } from '../components/PlaceDiscoverModal';
 import { PollVoteNamesModal } from '../components/PollVoteNamesModal';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { Screen } from '../components/Screen';
+import { SponsoredVenuesSection } from '../components/SponsoredVenuesSection';
+import { TabRootSafeAreaTop } from '../components/TabRootScrollChrome';
+import { SPONSORED_VENUES } from '../constants/monetization';
 import { TextField } from '../components/TextField';
 import { listDiscoverPollVoters } from '../services/pollVoters';
 import {
@@ -38,7 +47,7 @@ import {
 } from '../types/gamification';
 import { useAppTheme, useThemeMode } from '../ThemeContext';
 import type { AppTheme } from '../theme';
-import type { DiscoverSecondStopPayload } from '../navigation/types';
+import type { DiscoverSecondStopPayload, DiscoverStackParamList, MainTabParamList } from '../navigation/types';
 import type { StopPresentationPayload } from '../utils/presentationModel';
 import { buildDiscoverSpotlightPayload } from '../utils/discoverSpotlightPayload';
 import { POLL_MAX_OPTIONS, POLL_MIN_OPTIONS } from '../utils/pollFirestore';
@@ -48,12 +57,21 @@ import {
   writeSavedPlaceDiscoverCache,
 } from '../utils/savedPlacesDiscoverCache';
 import { fetchPresentationWebForPlaceSpotlight } from '../utils/stopWebEnrichment';
+import {
+  canCreateNewTrip,
+  canUsePlaceDiscoverFlow,
+} from '../services/tripCreationCredits';
 
 type SavedRowState = {
   entry: SavedPlaceEntry;
   status: 'loading' | 'ready' | 'error';
   payload?: StopPresentationPayload;
 };
+
+type DiscoverScreenNav = CompositeNavigationProp<
+  NativeStackNavigationProp<DiscoverStackParamList, 'Discover'>,
+  BottomTabNavigationProp<MainTabParamList>
+>;
 
 export function DiscoverScreen(props: {
   onOpenFriends: () => void;
@@ -63,8 +81,16 @@ export function DiscoverScreen(props: {
 }) {
   const theme = useAppTheme();
   const { mode } = useThemeMode();
+  const navigation = useNavigation<DiscoverScreenNav>();
+  const goToProfileTab = useCallback(() => {
+    navigation.navigate('ProfileTab', { screen: 'Profile' });
+  }, [navigation]);
   const styles = useMemo(() => createStyles(theme), [theme]);
   const uid = auth.currentUser?.uid;
+  const tripCredits = useTripCreationCredits();
+  const { isPro } = useProEntitlement();
+  const [noCreditsOpen, setNoCreditsOpen] = useState(false);
+  const [noCreditsVariant, setNoCreditsVariant] = useState<NoTripCreditsVariant>('discover');
 
   const [data, setData] = useState<DiscoverScreenPayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -412,13 +438,22 @@ export function DiscoverScreen(props: {
   }
 
   return (
-    <Screen>
+    <Screen safeAreaEdges={['left', 'right', 'bottom']} contentTopPadding={0}>
+      <NoTripCreditsModal
+        visible={noCreditsOpen}
+        variant={noCreditsVariant}
+        onClose={() => setNoCreditsOpen(false)}
+        onGoToProfile={goToProfileTab}
+      />
       <ScrollView
+        style={styles.tabScrollFill}
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.color.primary} />}
       >
+        <TabRootSafeAreaTop />
+        <SponsoredVenuesSection venues={SPONSORED_VENUES} />
         {loading && !data ? (
           <View style={styles.centered}>
             <ActivityIndicator color={theme.color.primary} size="large" />
@@ -499,6 +534,11 @@ export function DiscoverScreen(props: {
                       <Pressable
                         key={row.entry.googlePlaceId}
                         onPress={() => {
+                          if (tripCredits != null && !canUsePlaceDiscoverFlow(tripCredits, isPro)) {
+                            setNoCreditsVariant('discover');
+                            setNoCreditsOpen(true);
+                            return;
+                          }
                           setDiscoverSeedPlaceId(row.entry.googlePlaceId);
                           setDiscoverSeedPayload(row.payload ?? null);
                           setPlaceDiscoverOpen(true);
@@ -845,6 +885,13 @@ export function DiscoverScreen(props: {
           clearDiscoverSeed();
         }}
         onNavigateCreateTripWithSecondStop={(p) => {
+          if (tripCredits != null && !canCreateNewTrip(tripCredits, isPro)) {
+            setPlaceDiscoverOpen(false);
+            clearDiscoverSeed();
+            setNoCreditsVariant('createTrip');
+            setNoCreditsOpen(true);
+            return;
+          }
           setPlaceDiscoverOpen(false);
           clearDiscoverSeed();
           props.onNavigateCreateTripWithSecondStop(p);
@@ -995,10 +1042,19 @@ function BadgeOrb(props: {
 
 function createStyles(theme: AppTheme) {
   return StyleSheet.create({
+    tabScrollFill: {
+      flex: 1,
+      width: '100%',
+      maxWidth: '100%',
+      alignSelf: 'stretch',
+    },
     scroll: {
       paddingBottom: theme.space.xxl,
-      paddingHorizontal: theme.space.md,
       paddingTop: theme.space.sm,
+      width: '100%',
+      maxWidth: '100%',
+      flexGrow: 1,
+      alignItems: 'stretch',
     },
     centered: { paddingVertical: theme.space.xl, alignItems: 'center', gap: 12 },
     muted: { color: theme.color.muted, fontSize: theme.font.small, fontWeight: '600' },

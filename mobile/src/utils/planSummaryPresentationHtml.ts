@@ -384,7 +384,7 @@ export function buildPlanSummaryPresentationHtml(params: {
     ${
       routeMapImageUrl && String(routeMapImageUrl).trim()
         ? `<figure class="route-map-figure">
-      <img class="route-map-img" src="${escapeAttr(String(routeMapImageUrl).trim())}" alt="Rota haritası — duraklar arası hat" loading="eager" />
+      <img class="route-map-img" src="${escapeAttr(String(routeMapImageUrl).trim())}" alt="Rota haritası — duraklar arası hat" loading="eager" referrerpolicy="no-referrer" />
       <figcaption>Rota haritası (özet)</figcaption>
     </figure>`
         : ''
@@ -481,7 +481,9 @@ export async function buildPlanSummaryPresentationHtmlAsync(params: {
   comments: PlanHtmlCommentLine[];
   onProgress?: (done: number, total: number) => void;
 }): Promise<string> {
-  const routeMapImageUrl = routeOverviewStaticMapUrl(params.routeOrderedStops, 640, 360);
+  const routeMapImageUrl = routeOverviewStaticMapUrl(params.routeOrderedStops, 640, 360, {
+    preferOsmTiles: true,
+  });
   const enrichments = await enrichStopsForPlanPresentationHtml(
     params.routeOrderedStops,
     params.input.stops,

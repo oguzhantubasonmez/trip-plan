@@ -53,10 +53,21 @@ if (Platform.OS === 'web' && typeof window !== 'undefined') {
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
+const webRootFill =
+  Platform.OS === 'web'
+    ? {
+        flex: 1,
+        width: '100%' as const,
+        maxWidth: '100%' as const,
+        minWidth: '100%' as const,
+        alignSelf: 'stretch' as const,
+      }
+    : { flex: 1 };
+
 export default function App() {
   return (
     <ThemeProvider>
-      <SafeAreaProvider>
+      <SafeAreaProvider style={webRootFill}>
         <AppInner />
       </SafeAreaProvider>
     </ThemeProvider>
@@ -202,6 +213,7 @@ function AppInner() {
 
   return (
     <>
+    <View style={webRootFill}>
     <NavigationContainer ref={navigationRef} onReady={() => setNavReady(true)}>
       <StatusBar style={mode === 'light' ? 'dark' : 'light'} />
       <Stack.Navigator
@@ -242,6 +254,7 @@ function AppInner() {
         )}
       </Stack.Navigator>
     </NavigationContainer>
+    </View>
     {user ? <ReleaseNotesGate /> : null}
     {user?.uid ? (
       <AppOnboardingTour
