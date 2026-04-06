@@ -28,6 +28,12 @@ type Props = {
   stops: Stop[];
   /** Konumlu durakları güne göre; birden fazla gün varsa kullanıcı gün seçer (Google Maps’e sadece o gün gider). */
   navigationDayGroups?: MapNavigationDayGroup[];
+  /**
+   * Rota sunumu özet slaytı: rota detayıyla aynı MapView + hat; yol tarifi yok, jestler kapalı (ekran görüntüsü hissi).
+   */
+  embeddedPreview?: boolean;
+  /** `embeddedPreview` için harita yüksekliği (px). */
+  previewHeight?: number;
 };
 
 function isValidMapCoord(c: LatLng): boolean {
@@ -64,7 +70,12 @@ function sanitizePolyline(coords: LatLng[]): LatLng[] {
 
 export function NativeMapSection(props: Props) {
   const appTheme = useAppTheme();
-  const styles = useMemo(() => createMapStyles(appTheme), [appTheme]);
+  const embedded = Boolean(props.embeddedPreview);
+  const previewH = props.previewHeight ?? 176;
+  const styles = useMemo(
+    () => createMapStyles(appTheme, embedded ? previewH : undefined),
+    [appTheme, embedded, previewH]
+  );
   const mapRef = useRef<MapView>(null);
   const mapReadyRef = useRef(false);
   const [roadCoords, setRoadCoords] = useState<LatLng[] | null>(null);
@@ -196,7 +207,13 @@ export function NativeMapSection(props: Props) {
         provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
         mapType="standard"
         initialRegion={initialRegion}
-        showsUserLocation
+        showsUserLocation={!embedded}
+        scrollEnabled={!embedded}
+        zoomEnabled={!embedded}
+        zoomTapEnabled={!embedded}
+        rotateEnabled={!embedded}
+        pitchEnabled={!embedded}
+        toolbarEnabled={!embedded}
         onMapReady={handleMapReady}
         loadingEnabled
         loadingBackgroundColor={appTheme.color.surface}
@@ -220,87 +237,91 @@ export function NativeMapSection(props: Props) {
           />
         ))}
       </MapView>
-      <Pressable
-        style={({ pressed }) => [
-          styles.navButton,
-          { backgroundColor: appTheme.color.primary, opacity: pressed ? 0.88 : 1 },
-        ]}
-        onPress={() => void onOpenLiveNavigation()}
-        accessibilityRole="button"
-        accessibilityLabel="Google Haritalar ile canlı yol tarifi aç"
-      >
-        <Ionicons name="navigate" size={18} color="#fff" />
-        <Text style={styles.navButtonText}>
-          {navGroups.length > 1 ? 'Gün seç · Google Maps yol tarifi' : 'Canlı yol tarifi (Google Maps)'}
-        </Text>
-      </Pressable>
-
-      <Modal
-        visible={dayPickerOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setDayPickerOpen(false)}
-      >
-        <Pressable style={styles.modalBackdrop} onPress={() => setDayPickerOpen(false)}>
+      {!embedded ? (
+        <>
           <Pressable
-            style={[styles.modalCard, { backgroundColor: appTheme.color.surface }]}
-            onPress={(e) => e.stopPropagation()}
+            style={({ pressed }) => [
+              styles.navButton,
+              { backgroundColor: appTheme.color.primary, opacity: pressed ? 0.88 : 1 },
+            ]}
+            onPress={() => void onOpenLiveNavigation()}
+            accessibilityRole="button"
+            accessibilityLabel="Google Haritalar ile canlı yol tarifi aç"
           >
-            <Text style={[styles.modalTitle, { color: appTheme.color.text }]}>
-              Hangi gün için yol tarifi?
+            <Ionicons name="navigate" size={18} color="#fff" />
+            <Text style={styles.navButtonText}>
+              {navGroups.length > 1 ? 'Gün seç · Google Maps yol tarifi' : 'Canlı yol tarifi (Google Maps)'}
             </Text>
-            <Text style={[styles.modalHint, { color: appTheme.color.muted }]}>
-              Sadece seçtiğin günün durakları Google Haritalar’da açılır (Android’de genelde Google Maps
-              uygulaması).
-            </Text>
-            <FlatList
-              data={navGroups}
-              keyExtractor={(g) => g.dayYmd}
-              style={styles.modalList}
-              keyboardShouldPersistTaps="handled"
-              renderItem={({ item: g }) => (
+          </Pressable>
+
+          <Modal
+            visible={dayPickerOpen}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setDayPickerOpen(false)}
+          >
+            <Pressable style={styles.modalBackdrop} onPress={() => setDayPickerOpen(false)}>
+              <Pressable
+                style={[styles.modalCard, { backgroundColor: appTheme.color.surface }]}
+                onPress={(e) => e.stopPropagation()}
+              >
+                <Text style={[styles.modalTitle, { color: appTheme.color.text }]}>
+                  Hangi gün için yol tarifi?
+                </Text>
+                <Text style={[styles.modalHint, { color: appTheme.color.muted }]}>
+                  Sadece seçtiğin günün durakları Google Haritalar’da açılır (Android’de genelde Google Maps
+                  uygulaması).
+                </Text>
+                <FlatList
+                  data={navGroups}
+                  keyExtractor={(g) => g.dayYmd}
+                  style={styles.modalList}
+                  keyboardShouldPersistTaps="handled"
+                  renderItem={({ item: g }) => (
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.modalRow,
+                        { borderColor: appTheme.color.border },
+                        pressed && { opacity: 0.85 },
+                      ]}
+                      onPress={() => {
+                        setDayPickerOpen(false);
+                        void openNavForStops(g.stops);
+                      }}
+                    >
+                      <Text style={[styles.modalRowTitle, { color: appTheme.color.text }]} numberOfLines={2}>
+                        {g.dayLabel}
+                      </Text>
+                      <Text style={[styles.modalRowMeta, { color: appTheme.color.muted }]}>
+                        {g.stops.length} durak
+                      </Text>
+                      <Ionicons name="chevron-forward" size={20} color={appTheme.color.muted} />
+                    </Pressable>
+                  )}
+                />
                 <Pressable
                   style={({ pressed }) => [
-                    styles.modalRow,
+                    styles.modalCancel,
                     { borderColor: appTheme.color.border },
-                    pressed && { opacity: 0.85 },
+                    pressed && { opacity: 0.88 },
                   ]}
-                  onPress={() => {
-                    setDayPickerOpen(false);
-                    void openNavForStops(g.stops);
-                  }}
+                  onPress={() => setDayPickerOpen(false)}
                 >
-                  <Text style={[styles.modalRowTitle, { color: appTheme.color.text }]} numberOfLines={2}>
-                    {g.dayLabel}
-                  </Text>
-                  <Text style={[styles.modalRowMeta, { color: appTheme.color.muted }]}>
-                    {g.stops.length} durak
-                  </Text>
-                  <Ionicons name="chevron-forward" size={20} color={appTheme.color.muted} />
+                  <Text style={{ color: appTheme.color.primary, fontWeight: '600' }}>İptal</Text>
                 </Pressable>
-              )}
-            />
-            <Pressable
-              style={({ pressed }) => [
-                styles.modalCancel,
-                { borderColor: appTheme.color.border },
-                pressed && { opacity: 0.88 },
-              ]}
-              onPress={() => setDayPickerOpen(false)}
-            >
-              <Text style={{ color: appTheme.color.primary, fontWeight: '600' }}>İptal</Text>
+              </Pressable>
             </Pressable>
-          </Pressable>
-        </Pressable>
-      </Modal>
+          </Modal>
+        </>
+      ) : null}
     </View>
   );
 }
 
-function createMapStyles(t: AppTheme) {
+function createMapStyles(t: AppTheme, previewHeight?: number) {
   return StyleSheet.create({
     container: {
-      height: 220,
+      height: previewHeight ?? 220,
       borderRadius: t.radius.md,
       overflow: 'hidden',
       position: 'relative',

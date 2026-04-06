@@ -480,8 +480,44 @@ export function routeOverviewStaticMapUrl(
   const clng = (lngMin + lngMax) / 2;
   const z = zoomHeuristicForSpan(latMax - latMin || 0.01, lngMax - lngMin || 0.01, clat);
   const markerPts = coords.length > 18 ? coords.filter((_, i) => i % 2 === 0 || i === coords.length - 1) : coords;
-  const markers = markerPts.map((c) => `${c.lat.toFixed(5)},${c.lng.toFixed(5)},lightblue1`).join('%7C');
-  return `https://staticmap.openstreetmap.fr/staticmap.php?center=${clat},${clng}&zoom=${z}&size=${w}x${h}&maptype=mapnik&markers=${markers}`;
+  /** `lightblue1` bazı istemcilerde geçersiz sayılıp tüm görsel düşüyor; yalnızca lat,lon kullan. */
+  const markersRaw = markerPts.map((c) => `${c.lat.toFixed(5)},${c.lng.toFixed(5)}`).join('|');
+  let url = `https://staticmap.openstreetmap.fr/staticmap.php?center=${clat},${clng}&zoom=${z}&size=${w}x${h}&maptype=mapnik&markers=${encodeURIComponent(markersRaw)}`;
+  if (url.length > 1800) {
+    url = `https://staticmap.openstreetmap.fr/staticmap.php?center=${clat},${clng}&zoom=${z}&size=${w}x${h}&maptype=mapnik`;
+  }
+  return url;
+}
+
+/**
+ * HTML / tarayıcıda güvenilir önizleme: OpenStreetMap embed (iframe). Ağ gerekir.
+ * bbox: min_lon, min_lat, max_lon, max_lat
+ */
+export function routeOverviewOsmEmbedUrl(stops: Stop[]): string | undefined {
+  const coords = [...stops]
+    .filter(
+      (s) =>
+        s.coords?.latitude != null &&
+        s.coords?.longitude != null &&
+        Number.isFinite(s.coords.latitude) &&
+        Number.isFinite(s.coords.longitude)
+    )
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .map((s) => ({ lat: s.coords!.latitude, lng: s.coords!.longitude }));
+  if (coords.length === 0) return undefined;
+
+  const lats = coords.map((c) => c.lat);
+  const lngs = coords.map((c) => c.lng);
+  const latSpan = Math.max(0.02, Math.max(...lats) - Math.min(...lats));
+  const lngSpan = Math.max(0.02, Math.max(...lngs) - Math.min(...lngs));
+  const padLat = Math.max(0.06, latSpan * 0.18);
+  const padLng = Math.max(0.06, lngSpan * 0.18);
+  const minLat = Math.min(...lats) - padLat;
+  const maxLat = Math.max(...lats) + padLat;
+  const minLng = Math.min(...lngs) - padLng;
+  const maxLng = Math.max(...lngs) + padLng;
+  const bbox = `${minLng},${minLat},${maxLng},${maxLat}`;
+  return `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(bbox)}&layer=mapnik`;
 }
 
 /** Sunum: Wikipedia/OSM özet dilimi (durak başlığına göre). */

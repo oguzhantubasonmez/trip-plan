@@ -101,6 +101,7 @@ import {
 } from '../utils/planSummaryExport';
 import { buildPlanSummaryPresentationHtmlAsync } from '../utils/planSummaryPresentationHtml';
 import { useProEntitlement } from '../hooks/useProEntitlement';
+import { PRO_STORE_SUBSCRIPTION_LIVE } from '../constants/proFeatureGates';
 
 const RSVP_LABELS: Record<string, string> = {
   going: 'Katılıyorum',
@@ -219,6 +220,8 @@ export function TripDetailScreen(props: {
   }
   const navigation = useNavigation<NativeStackNavigationProp<HomeStackParamList>>();
   const { isPro } = useProEntitlement();
+  /** Mağaza aboneliği kapalıyken Plan özeti Pro kapıları açık kalır. */
+  const proTripDetailFeaturesLocked = PRO_STORE_SUBSCRIPTION_LIVE && !isPro;
   const openProUpsell = useCallback(() => {
     Alert.alert(
       'RouteWise Pro',
@@ -905,7 +908,7 @@ export function TripDetailScreen(props: {
   }
 
   async function handleRecalculateLegs() {
-    if (!isPro) {
+    if (proTripDetailFeaturesLocked) {
       openProUpsell();
       return;
     }
@@ -1061,7 +1064,7 @@ export function TripDetailScreen(props: {
   async function handleExportPlanCsv() {
     const t = trip;
     if (!t) return;
-    if (!isPro) {
+    if (proTripDetailFeaturesLocked) {
       openProUpsell();
       return;
     }
@@ -1099,7 +1102,7 @@ export function TripDetailScreen(props: {
   async function runPlanHtmlExport() {
     const t = trip;
     if (!t) return;
-    if (!isPro) {
+    if (proTripDetailFeaturesLocked) {
       openProUpsell();
       return;
     }

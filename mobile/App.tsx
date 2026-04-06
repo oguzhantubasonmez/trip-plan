@@ -11,12 +11,14 @@ import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-nativ
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Screen } from './src/components/Screen';
 import { auth } from './src/lib/firebase';
+import { setPostTripCreationAdPrefaceListener } from './src/lib/postTripCreationAdPrefaceBridge';
 import { MainTabNavigator } from './src/navigation/MainTabNavigator';
 import type { RootStackParamList } from './src/navigation/types';
 import { ThemeProvider, useAppTheme, useThemeMode } from './src/ThemeContext';
 import { AuthScreen } from './src/screens/AuthScreen';
 import { AppOnboardingTour } from './src/components/AppOnboardingTour';
 import { LaunchSplashOverlay } from './src/components/LaunchSplashOverlay';
+import { PostTripCreationAdPrefaceModal } from './src/components/PostTripCreationAdPrefaceModal';
 import { ReleaseNotesGate } from './src/components/ReleaseNotesGate';
 import { JoinInviteScreen } from './src/screens/JoinInviteScreen';
 import type { AppTheme } from './src/theme';
@@ -86,6 +88,8 @@ function AppInner() {
   const [rootRouteName, setRootRouteName] = useState<string | undefined>(undefined);
   const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
   const [launchSplashDone, setLaunchSplashDone] = useState(false);
+  const [tripAdPrefaceOpen, setTripAdPrefaceOpen] = useState(false);
+  const tripAdPrefaceResolveRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -116,6 +120,20 @@ function AppInner() {
     if (!uid) return;
     void ensureTripCreationCreditsField(uid);
   }, [user?.uid]);
+
+  useEffect(() => {
+    if (!user) {
+      setTripAdPrefaceOpen(false);
+      tripAdPrefaceResolveRef.current = null;
+      setPostTripCreationAdPrefaceListener(null);
+      return;
+    }
+    setPostTripCreationAdPrefaceListener((resolve) => {
+      tripAdPrefaceResolveRef.current = resolve;
+      setTripAdPrefaceOpen(true);
+    });
+    return () => setPostTripCreationAdPrefaceListener(null);
+  }, [user]);
 
   useEffect(() => {
     if (!navReady) return;
@@ -262,6 +280,17 @@ function AppInner() {
         userId={user.uid}
         navigationRef={navigationRef}
         onFinished={() => setOnboardingDone(true)}
+      />
+    ) : null}
+    {user ? (
+      <PostTripCreationAdPrefaceModal
+        visible={tripAdPrefaceOpen}
+        onContinue={() => {
+          const r = tripAdPrefaceResolveRef.current;
+          tripAdPrefaceResolveRef.current = null;
+          setTripAdPrefaceOpen(false);
+          r?.();
+        }}
       />
     ) : null}
     </>

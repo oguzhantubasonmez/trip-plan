@@ -1,15 +1,13 @@
 import { Alert, Platform } from 'react-native';
 import { getGoogleMobileAdsModule, isExpoGoEnvironment } from './mobileAds';
+import {
+  POST_TRIP_CREATION_AD_PREFACE_MESSAGE,
+  POST_TRIP_CREATION_AD_PREFACE_TITLE,
+  waitPostTripAdPrefaceContinue,
+} from './postTripCreationAdPrefaceBridge';
 import { formatRewardedAdErrorForUser, loadAndShowRewardedAdOnce } from './rewardedTripCreditAdFlow';
 
-export const POST_TRIP_CREATION_AD_PREFACE_TITLE = 'Rota oluşturuldu';
-
-/** Reklam öncesi kullanıcıya gösterilen açıklama (rota hakkı artmaz). */
-export const POST_TRIP_CREATION_AD_PREFACE_MESSAGE =
-  'Planını kaydettik. Rota oluşumunu tamamlamak için sırada kısa bir reklam izlemen gerekiyor. ' +
-  'Tamamen ücretsiz bir uygulamada sana daha iyi hizmet sunabilmemiz için bu desteğe ihtiyacımız var; ' +
-  'anlayışın için teşekkür ederiz.\n\n' +
-  'Devam ettiğinde reklam açılacak. Bu izlenim rota hakkını artırmaz.';
+export { POST_TRIP_CREATION_AD_PREFACE_MESSAGE, POST_TRIP_CREATION_AD_PREFACE_TITLE };
 
 /**
  * Yeni rota kaydı sonrası: önce açıklama, sonra ödüllü reklam (Firestore’a +1 yazılmaz).
@@ -36,14 +34,7 @@ export async function runPostTripCreationAdFlow(opts?: { skipAds?: boolean }): P
     return;
   }
 
-  await new Promise<void>((resolve) => {
-    Alert.alert(
-      POST_TRIP_CREATION_AD_PREFACE_TITLE,
-      POST_TRIP_CREATION_AD_PREFACE_MESSAGE,
-      [{ text: 'Reklamı izle ve devam et', onPress: () => resolve() }],
-      { cancelable: false }
-    );
-  });
+  await waitPostTripAdPrefaceContinue();
 
   try {
     await loadAndShowRewardedAdOnce(mod);

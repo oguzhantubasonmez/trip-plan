@@ -4,6 +4,7 @@ import {
   FlatList,
   Image,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -27,6 +28,7 @@ import {
 } from '../utils/tripSchedule';
 import { buildPlanStopRows } from '../utils/planSummaryExport';
 import { buildStopPresentationPayloads, type StopPresentationPayload } from '../utils/presentationModel';
+import { NativeMapSection } from '../components/NativeMapSection';
 import { enrichPresentationPayloads } from '../utils/stopPresentationEnrichment';
 import { routeOverviewStaticMapUrl, staticMapPreviewUrlFallback } from '../utils/stopWebEnrichment';
 import { GOOGLE_PLACE_RATING_STAR_COLOR } from '../services/places';
@@ -155,16 +157,27 @@ function ResilientOrbitImage({
   );
 }
 
+function stopHasCoords(s: Stop): boolean {
+  return (
+    s.coords?.latitude != null &&
+    s.coords?.longitude != null &&
+    Number.isFinite(s.coords.latitude) &&
+    Number.isFinite(s.coords.longitude)
+  );
+}
+
 function IntroSlide({
   width,
   trip,
   totals,
+  routeOrderedStops,
   routeMapUri,
   routeMapFallbackUri,
 }: {
   width: number;
   trip: Trip;
   totals: TripTotalsForIntro;
+  routeOrderedStops: Stop[];
   routeMapUri?: string | null;
   routeMapFallbackUri?: string | null;
 }) {
@@ -183,9 +196,23 @@ function IntroSlide({
         ? `${trip.totalDistance} km`
         : null;
 
+  const hasCoords = routeOrderedStops.some(stopHasCoords);
+  const useNativeRouteMap = Platform.OS !== 'web' && hasCoords;
+
   return (
     <View style={[slideStyles.page, { width }]}>
-      {routeMapUri ? (
+      {useNativeRouteMap ? (
+        <View style={slideStyles.introRouteMapWrap}>
+          <NativeMapSection
+            embeddedPreview
+            previewHeight={176}
+            stops={routeOrderedStops}
+          />
+          <Text style={slideStyles.introRouteMapCaption} numberOfLines={1}>
+            Rota haritası (özet)
+          </Text>
+        </View>
+      ) : hasCoords && routeMapUri ? (
         <View style={slideStyles.introRouteMapWrap}>
           <ResilientHeroImage
             uri={routeMapUri}
@@ -878,6 +905,7 @@ export function TripPresentationScreen(props: {
             width={width}
             trip={trip}
             totals={tripTotals}
+            routeOrderedStops={routeOrderedStops}
             routeMapUri={introRouteMapUri}
             routeMapFallbackUri={introRouteMapFallbackUri}
           />
@@ -885,7 +913,15 @@ export function TripPresentationScreen(props: {
       }
       return pageShell(<PresentationStopSlide item={item.payload} width={width} />);
     },
-    [width, trip, tripTotals, pagerViewportHeight, introRouteMapUri, introRouteMapFallbackUri]
+    [
+      width,
+      trip,
+      tripTotals,
+      pagerViewportHeight,
+      introRouteMapUri,
+      introRouteMapFallbackUri,
+      routeOrderedStops,
+    ]
   );
 
   const renderOrbit: ListRenderItem<PresentationRow> = useCallback(

@@ -1,6 +1,10 @@
 import type { Stop } from '../types/trip';
 import type { StopPresentationWebBlock } from './stopWebEnrichment';
-import { fetchPresentationWebForStop, routeOverviewStaticMapUrl } from './stopWebEnrichment';
+import {
+  fetchPresentationWebForStop,
+  routeOverviewOsmEmbedUrl,
+  routeOverviewStaticMapUrl,
+} from './stopWebEnrichment';
 import {
   allocateFuelTlByDay,
   computeDayTotals,
@@ -153,10 +157,12 @@ export function buildPlanSummaryPresentationHtml(params: {
   input: PlanSummaryExportInput;
   enrichments: StopPresentationWebBlock[];
   comments: PlanHtmlCommentLine[];
-  /** Rota haritası — statik görsel (HTML üstü). */
+  /** Rota haritası — statik görsel (HTML üstü, yedek). */
   routeMapImageUrl?: string | null;
+  /** Rota haritası — OSM embed (tarayıcıda güvenilir; rota detayı alanına yakın etkileşimli harita). */
+  routeMapOsmEmbedUrl?: string | null;
 }): string {
-  const { input, enrichments, comments, routeMapImageUrl } = params;
+  const { input, enrichments, comments, routeMapImageUrl, routeMapOsmEmbedUrl } = params;
   const title = escapeHtml(input.tripTitle);
   const fuelShareByDay = allocateFuelTlByDay(input.dayGroups, input.fuelTl);
 
@@ -376,18 +382,32 @@ export function buildPlanSummaryPresentationHtml(params: {
       object-fit: cover;
       vertical-align: middle;
     }
+    .route-map-iframe {
+      width: 100%;
+      display: block;
+      height: 280px;
+      max-height: 50vh;
+      border: 0;
+      vertical-align: middle;
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
     <p class="notice">Bu sayfa rota sunumuna benzer şekilde üretildi: her durak için Wikipedia / Google verileri çevrimiçi alınmış olabilir. Görseller harici sunuculardan yüklenir.</p>
     ${
-      routeMapImageUrl && String(routeMapImageUrl).trim()
-        ? `<figure class="route-map-figure">
-      <img class="route-map-img" src="${escapeAttr(String(routeMapImageUrl).trim())}" alt="Rota haritası — duraklar arası hat" loading="eager" referrerpolicy="no-referrer" />
+      (() => {
+        const embed = routeMapOsmEmbedUrl && String(routeMapOsmEmbedUrl).trim();
+        const img = routeMapImageUrl && String(routeMapImageUrl).trim();
+        if (!embed && !img) return '';
+        const body = embed
+          ? `<iframe class="route-map-iframe" title="Rota haritası" src="${escapeAttr(embed)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>`
+          : `<img class="route-map-img" src="${escapeAttr(String(img))}" alt="Rota haritası — duraklar arası hat" loading="eager" referrerpolicy="no-referrer" />`;
+        return `<figure class="route-map-figure">
+      ${body}
       <figcaption>Rota haritası (özet)</figcaption>
-    </figure>`
-        : ''
+    </figure>`;
+      })()
     }
     <header class="hero">
       <div class="brand">RouteWise</div>
@@ -482,8 +502,9 @@ export async function buildPlanSummaryPresentationHtmlAsync(params: {
   onProgress?: (done: number, total: number) => void;
 }): Promise<string> {
   const routeMapImageUrl = routeOverviewStaticMapUrl(params.routeOrderedStops, 640, 360, {
-    preferOsmTiles: true,
+    preferOsmTiles: false,
   });
+  const routeMapOsmEmbedUrl = routeOverviewOsmEmbedUrl(params.routeOrderedStops);
   const enrichments = await enrichStopsForPlanPresentationHtml(
     params.routeOrderedStops,
     params.input.stops,
@@ -494,5 +515,6 @@ export async function buildPlanSummaryPresentationHtmlAsync(params: {
     enrichments,
     comments: params.comments,
     routeMapImageUrl,
+    routeMapOsmEmbedUrl,
   });
 }
