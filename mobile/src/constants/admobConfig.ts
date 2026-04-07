@@ -13,20 +13,31 @@
  * 4) Google Mobile Ads SDK politikalarına uy (GDPR/UMP gerekiyorsa ileride eklenebilir).
  */
 
-export function getBannerAdUnitId(TestIds: { BANNER: string; ADAPTIVE_BANNER: string }): string {
-  const fromEnv =
+function readEnvBannerId(): string {
+  const v =
     typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_ADMOB_BANNER_UNIT_ID
       ? String(process.env.EXPO_PUBLIC_ADMOB_BANNER_UNIT_ID).trim()
       : '';
-  if (fromEnv) return fromEnv;
-  return __DEV__ ? TestIds.ADAPTIVE_BANNER || TestIds.BANNER : TestIds.ADAPTIVE_BANNER || TestIds.BANNER;
+  return v;
 }
 
-export function getRewardedAdUnitId(TestIds: { REWARDED: string }): string {
-  const fromEnv =
+function readEnvRewardedId(): string {
+  const v =
     typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_ADMOB_REWARDED_UNIT_ID
       ? String(process.env.EXPO_PUBLIC_ADMOB_REWARDED_UNIT_ID).trim()
       : '';
+  return v;
+}
+
+export function getBannerAdUnitId(TestIds: { BANNER: string; ADAPTIVE_BANNER: string }): string {
+  const fromEnv = readEnvBannerId();
+  if (fromEnv) return fromEnv;
+  /** Ortam değişkeni yok: SDK’nın resmi test birimi (geliştirme ve mağaza derlemesi için aynı yedek). */
+  return TestIds.ADAPTIVE_BANNER || TestIds.BANNER;
+}
+
+export function getRewardedAdUnitId(TestIds: { REWARDED: string }): string {
+  const fromEnv = readEnvRewardedId();
   if (fromEnv) return fromEnv;
   return TestIds.REWARDED;
 }
